@@ -8,5 +8,6 @@ TOOL_DEFINITION = {
     "command": ["ruff", "format"],
     "summary": "Organized Imports (Ruff)",
     "scopes": ["file", "directory", "workspace"],
+    "category": "Format",
     "order": 25,
 }

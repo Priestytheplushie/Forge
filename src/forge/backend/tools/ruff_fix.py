@@ -8,5 +8,6 @@ TOOL_DEFINITION = {
     "command": ["ruff", "check", "--fix", "--unsafe-fixes"],
     "summary": "Fixed Lint Issues (Ruff)",
     "scopes": ["file", "directory", "workspace"],
+    "category": "Lint & Fix",
     "order": 30,
 }

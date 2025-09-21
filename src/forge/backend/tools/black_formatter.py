@@ -8,6 +8,6 @@ TOOL_DEFINITION = {
     "command": ["black"],
     "summary": "Formatted Code (Black)",
     "scopes": ["file", "directory", "workspace"],
-    "separator_before": True,
+    "category": "Format",
     "order": 20,
 }

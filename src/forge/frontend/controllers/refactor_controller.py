@@ -1,8 +1,15 @@
 from PySide6.QtCore import QObject, Slot
-from PySide6.QtWidgets import QMessageBox, QInputDialog, QFileDialog, QApplication
+from PySide6.QtWidgets import (
+    QMessageBox,
+    QInputDialog,
+    QFileDialog,
+    QApplication,
+    QMenu,
+)
 from PySide6.QtGui import QAction
 from pathlib import Path
 import os
+from collections import defaultdict
 
 from forge.backend.tools.tool_registry import ToolRegistry
 from forge.frontend.components.editor.diff_editor_widget import DiffEditorWidget
@@ -42,28 +49,44 @@ class RefactorController(QObject):
 
         tools = self.tool_registry.get_all_tools()
 
-        for tool in tools:
-            if tool.get("separator_before"):
-                menu.addSeparator()
-            if "file" in tool["scopes"]:
-                action = QAction(f"{tool['name']} on File...", self)
-                action.triggered.connect(
-                    lambda checked=False, tool_id=tool[
-                        "id"
-                    ]: self.on_refactor_action_triggered(tool_id, "file")
-                )
-                menu.addAction(action)
+        def populate_menu(parent_menu, scope_name, suffix):
 
-        menu.addSeparator()
-        for tool in tools:
-            if "workspace" in tool["scopes"]:
-                action = QAction(f"{tool['name']} on Workspace...", self)
+            categories = defaultdict(list)
+            top_level_tools = []
+            for tool in tools:
+                if scope_name in tool["scopes"]:
+                    category = tool.get("category")
+                    if category:
+                        categories[category].append(tool)
+                    else:
+                        top_level_tools.append(tool)
+
+            for tool in top_level_tools:
+                action = QAction(f"{tool['name']} on {suffix}...", self)
                 action.triggered.connect(
                     lambda checked=False, tool_id=tool[
                         "id"
-                    ]: self.on_refactor_action_triggered(tool_id, "workspace")
+                    ]: self.on_refactor_action_triggered(tool_id, scope_name)
                 )
-                menu.addAction(action)
+                parent_menu.addAction(action)
+
+            if top_level_tools and categories:
+                parent_menu.addSeparator()
+
+            for category_name, cat_tools in sorted(categories.items()):
+                submenu = parent_menu.addMenu(category_name)
+                for tool in cat_tools:
+                    action = QAction(f"{tool['name']} on {suffix}...", self)
+                    action.triggered.connect(
+                        lambda checked=False, tool_id=tool[
+                            "id"
+                        ]: self.on_refactor_action_triggered(tool_id, scope_name)
+                    )
+                    submenu.addAction(action)
+
+        populate_menu(menu, "file", "File")
+        menu.addSeparator()
+        populate_menu(menu, "workspace", "Workspace")
 
         self.main_window.file_explorer.set_refactor_tools(tools)
 
@@ -152,14 +175,12 @@ class RefactorController(QObject):
         )
 
         tool_kwargs = {}
-
         if tool["handler_type"] == "programmatic_with_dialog":
             if tool["id"] == "find_replace":
                 dialog = FindReplaceDialog(target_name, self.main_window)
                 if not dialog.exec():
                     return
                 tool_kwargs = dialog.params
-
         else:
             dialog = ToolConfirmationDialog(
                 tool, target_name, self.theme_manager, self.main_window

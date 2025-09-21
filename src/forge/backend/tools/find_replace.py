@@ -2,9 +2,6 @@ import re
 
 
 def run_find_replace_on_content(content: str, **kwargs) -> str | None:
-    """
-    Performs find and replace on a string of content based on provided parameters.
-    """
     find_text = kwargs.get("find_text")
     replace_text = kwargs.get("replace_text")
     case_sensitive = kwargs.get("case_sensitive", False)
@@ -30,7 +27,6 @@ def run_find_replace_on_content(content: str, **kwargs) -> str | None:
         if num_replacements > 0:
             return new_content
     except re.error as e:
-
         print(f"[FindReplace] Regex error: {e}")
         return None
 

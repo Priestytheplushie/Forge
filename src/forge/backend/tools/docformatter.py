@@ -8,5 +8,6 @@ TOOL_DEFINITION = {
     "command": ["docformatter", "--in-place"],
     "summary": "Formatted Docstrings (docformatter)",
     "scopes": ["file", "directory", "workspace"],
+    "category": "Format",
     "order": 50,
 }

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
 )
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Slot, Qt
 
 
 class FindReplaceDialog(QDialog):
@@ -22,7 +22,8 @@ class FindReplaceDialog(QDialog):
         main_layout = QVBoxLayout(self)
         form_layout = QFormLayout()
         form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-        form_layout.setLabelAlignment(Slot.AlignRight)
+
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         explanation_label = QLabel(
             "Find and replace text across all files in the current scope. All proposed changes "

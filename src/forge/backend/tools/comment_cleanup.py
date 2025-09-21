@@ -5,10 +5,7 @@ COMMENT_PATTERNS = re.compile(
 )
 
 
-def run_cleanup_on_content(content: str) -> str | None:
-    """
-    Finds and removes common temporary/scaffolding comments from code content.
-    """
+def run_cleanup_on_content(content: str, **kwargs) -> str | None:
     cleaned_content = COMMENT_PATTERNS.sub("", content)
     cleaned_content = re.sub(r"\n{3,}", "\n\n", cleaned_content).strip()
 
@@ -27,5 +24,6 @@ TOOL_DEFINITION = {
     "handler_function": run_cleanup_on_content,
     "summary": "Removed temporary comments",
     "scopes": ["file", "directory", "workspace"],
+    "category": "Lint & Fix",
     "order": 10,
 }
