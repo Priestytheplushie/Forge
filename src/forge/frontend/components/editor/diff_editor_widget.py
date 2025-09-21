@@ -1,7 +1,7 @@
-from PySide6.QtWidgets import QWidget, QPushButton
+from PySide6.QtWidgets import QWidget, QPushButton, QHBoxLayout
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtCore import QUrl, Slot, Signal
+from PySide6.QtCore import QUrl, Slot, Signal, Qt
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtGui import QColor
 from pathlib import Path
@@ -11,8 +11,10 @@ from .editor_bridge import DiffBridge
 
 
 class DiffEditorWidget(QWidget):
-    primary_action_requested = Signal()
+    primary_action_requested = Signal(object)
     stage_lines_requested = Signal(str)
+    accept_file_requested = Signal(object)
+    discard_file_requested = Signal(object)
 
     def __init__(self, theme_data: dict, parent=None):
         super().__init__(parent)
@@ -39,27 +41,52 @@ class DiffEditorWidget(QWidget):
         self.bridge.stage_lines_requested.connect(self.stage_lines_requested)
 
         self.primary_action_button = QPushButton("Action", self)
-        self.primary_action_button.clicked.connect(self.primary_action_requested)
-        self.primary_action_button.setStyleSheet("""
-            QPushButton { 
-                background-color: #3C3F41; color: #D8DEE9; border: 1px solid #555555; 
-                padding: 8px 16px; border-radius: 4px; 
-            }
-            QPushButton:hover { background-color: #4B4E50; }
-        """)
+        self.primary_action_button.clicked.connect(
+            lambda: self.primary_action_requested.emit(self)
+        )
+        self.primary_action_button.setStyleSheet(
+            "QPushButton { background-color: #3C3F41; color: #D8DEE9; border: 1px solid #555555; padding: 8px 16px; border-radius: 4px; } QPushButton:hover { background-color: #4B4E50; }"
+        )
         self.primary_action_button.setVisible(False)
+
+        self.review_button_widget = QWidget(self)
+        review_layout = QHBoxLayout(self.review_button_widget)
+        review_layout.setContentsMargins(0, 0, 0, 0)
+        review_layout.setSpacing(10)
+        self.accept_button = QPushButton("Accept File")
+        self.accept_button.setStyleSheet(
+            "QPushButton { background-color: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; } QPushButton:hover { background-color: #45a049; }"
+        )
+        self.discard_button = QPushButton("Discard File")
+        self.discard_button.setStyleSheet(
+            "QPushButton { background-color: #f44336; color: white; border: none; padding: 8px 16px; border-radius: 4px; } QPushButton:hover { background-color: #da190b; }"
+        )
+        review_layout.addWidget(self.accept_button)
+        review_layout.addWidget(self.discard_button)
+        self.review_button_widget.setVisible(False)
+        self.accept_button.clicked.connect(
+            lambda: self.accept_file_requested.emit(self)
+        )
+        self.discard_button.clicked.connect(
+            lambda: self.discard_file_requested.emit(self)
+        )
 
         html_file_path = Path(__file__).resolve().parent / "web" / "index.html"
         self.web_view.setUrl(QUrl.fromLocalFile(str(html_file_path)))
 
+    def enter_review_mode(self):
+        self.review_button_widget.setVisible(True)
+        self.primary_action_button.setVisible(False)
+
+    def exit_review_mode(self):
+        self.review_button_widget.setVisible(False)
+
     def set_primary_action(self, text: str, visible: bool = True):
-        """Sets the text and visibility of the main action button."""
         self.primary_action_button.setText(text)
         self.primary_action_button.setVisible(visible)
 
     @Slot()
     def _on_web_channel_ready(self):
-        """Called from JS via the bridge when the web channel is established."""
         print(
             "[DiffEditorWidget] Web channel is ready. Initializing Monaco diff editor."
         )
@@ -90,10 +117,12 @@ class DiffEditorWidget(QWidget):
         modified_label: str,
     ):
         if self.is_ready:
-            js_original = json.dumps(original_content)
-            js_modified = json.dumps(modified_content)
-            js_original_label = json.dumps(original_label)
-            js_modified_label = json.dumps(modified_label)
+            js_original, js_modified = json.dumps(original_content), json.dumps(
+                modified_content
+            )
+            js_original_label, js_modified_label = json.dumps(
+                original_label
+            ), json.dumps(modified_label)
             self.web_view.page().runJavaScript(
                 f"set_diff_content({js_original}, {js_modified}, {js_original_label}, {js_modified_label});"
             )
@@ -116,10 +145,17 @@ class DiffEditorWidget(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.web_view.setGeometry(self.rect())
-        btn_size = self.primary_action_button.sizeHint()
         padding = 20
+
+        btn_size = self.primary_action_button.sizeHint()
         x = self.width() - btn_size.width() - padding
         y = self.height() - btn_size.height() - padding
         self.primary_action_button.move(x, y)
+
+        review_size = self.review_button_widget.sizeHint()
+        review_x = self.width() - review_size.width() - padding
+        review_y = self.height() - review_size.height() - padding
+        self.review_button_widget.move(review_x, review_y)
+
         if self.is_ready:
             self.web_view.page().runJavaScript("layout_editor();")

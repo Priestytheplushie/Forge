@@ -17,9 +17,12 @@ class FileExplorer(QTreeView):
     new_folder_requested = Signal(str)
     rename_item_requested = Signal(str)
     delete_item_requested = Signal(str)
+    refactor_requested = Signal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        self.refactor_tool_definitions = []
 
         self.source_model = QFileSystemModel()
         self.proxy_model = FileSortProxyModel(self)
@@ -59,6 +62,9 @@ class FileExplorer(QTreeView):
         self.customContextMenuRequested.connect(self.on_context_menu)
 
         self.doubleClicked.connect(self.on_double_clicked)
+
+    def set_refactor_tools(self, tools: list):
+        self.refactor_tool_definitions = tools
 
     def on_double_clicked(self, proxy_index: QModelIndex):
         source_index = self.proxy_model.mapToSource(proxy_index)
@@ -103,6 +109,24 @@ class FileExplorer(QTreeView):
             menu.addSeparator()
             menu.addAction(action_rename)
             menu.addAction(action_delete)
+
+        menu.addSeparator()
+        refactor_menu = menu.addMenu("Refactor")
+
+        can_refactor = is_dir or path.endswith(".py")
+        if can_refactor:
+            for tool in self.refactor_tool_definitions:
+                if "directory" in tool["scopes"]:
+                    if tool.get("separator_before"):
+                        refactor_menu.addSeparator()
+                    action = refactor_menu.addAction(tool["name_path"])
+                    action.triggered.connect(
+                        lambda checked=False, tool_id=tool[
+                            "id"
+                        ], p=path: self.refactor_requested.emit(tool_id, p)
+                    )
+        else:
+            refactor_menu.setEnabled(False)
 
         menu.exec(self.viewport().mapToGlobal(point))
 

@@ -20,21 +20,25 @@ class CreateBranchDialog(QDialog):
         r"[\s~^:?*\[\\ G]" r"|\.\." r"|/\." r"|/$" r"|\.lock$" r"|@\{"
     )
 
-    def __init__(self, branches: list, current_branch: str, parent=None):
+    def __init__(
+        self,
+        branches: list,
+        current_branch: str,
+        parent=None,
+        title: str = "Create New Branch",
+        explanation: str = "A branch is like an alternate universe for your code. Create a new branch to work on features or fixes without affecting the main version.",
+        ok_button_text: str = "Create Branch",
+    ):
         super().__init__(parent)
-        self.setWindowTitle("Create New Branch")
+        self.setWindowTitle(title)
         self.setMinimumWidth(450)
 
         main_layout = QVBoxLayout(self)
         form_layout = QFormLayout()
 
-        explanation = QLabel(
-            "A branch is like an alternate universe for your code. "
-            "Create a new branch to work on features or fixes without affecting the main version. "
-            "You can merge your changes back in later."
-        )
-        explanation.setWordWrap(True)
-        explanation.setStyleSheet("color: #888888; margin-bottom: 15px;")
+        explanation_label = QLabel(explanation)
+        explanation_label.setWordWrap(True)
+        explanation_label.setStyleSheet("color: #888888; margin-bottom: 15px;")
 
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("new-feature-branch")
@@ -58,10 +62,10 @@ class CreateBranchDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         self.ok_button = button_box.button(QDialogButtonBox.StandardButton.Ok)
-        self.ok_button.setText("Create Branch")
+        self.ok_button.setText(ok_button_text)
         self.ok_button.setEnabled(False)
 
-        main_layout.addWidget(explanation)
+        main_layout.addWidget(explanation_label)
         main_layout.addLayout(form_layout)
         main_layout.addWidget(button_box)
 
@@ -95,7 +99,6 @@ class CreateBranchDialog(QDialog):
             f"All code on '{base_branch}' will be copied to your new branch to start."
         )
         self.dynamic_explanation_label.setText(text)
-
         if self.INVALID_BRANCH_CHARS_RE.search(self.name_edit.text()):
             self.dynamic_explanation_label.setText(
                 "<font color='#F77669'>Branch name cannot contain spaces or invalid characters (~, ^, :, ?, *, [).</font>"

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QToolButton,
     QMessageBox,
     QFrame,
+    QDockWidget,
 )
 from PySide6.QtCore import Qt, Signal, Slot, QPoint, QSize, QFileInfo
 from PySide6.QtGui import QAction, QActionGroup
@@ -100,7 +101,9 @@ class SourceControlPanel(QWidget):
     clone_repo_requested = Signal()
     abort_merge_requested = Signal()
 
-    def __init__(self, icon_provider: QFileIconProvider, parent=None):
+    def __init__(
+        self, icon_provider: QFileIconProvider, dock_widget: QDockWidget, parent=None
+    ):
         super().__init__(parent)
         self.icon_provider = icon_provider
         self.current_staged_files = []
@@ -112,6 +115,12 @@ class SourceControlPanel(QWidget):
 
         self.stack = QStackedWidget(self)
         self.main_layout.addWidget(self.stack)
+
+        sc_title_bar = dock_widget.titleBarWidget()
+        buttons = sc_title_bar.findChildren(QToolButton)
+        self.git_pull_button = buttons[0]
+        self.git_push_button = buttons[1]
+        self.git_refresh_button = buttons[2]
 
         self.no_repo_widget = QWidget()
         no_repo_layout = QVBoxLayout(self.no_repo_widget)

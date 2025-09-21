@@ -5,3 +5,5 @@ ruff
 black
 flake8
 pyupgrade
+docformatter
+GitPython

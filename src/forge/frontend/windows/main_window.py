@@ -12,10 +12,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QWidget,
     QToolButton,
-    QSizePolicy,
     QHBoxLayout,
     QMenu,
     QComboBox,
+    QTabBar,
 )
 from PySide6.QtCore import Qt, QFileInfo, Slot, Signal
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QActionGroup
@@ -27,23 +27,34 @@ from ..components.panels.problems_panel import ProblemsPanel
 from ..components.panels.outline_panel import OutlinePanel
 from ..components.panels.timeline_panel import TimelinePanel
 from ..components.panels.conflicts_panel import ConflictsPanel
+from ..components.panels.review_panel import ReviewPanel
 from ..components.editor.editor_widget import EditorWidget
 from ..components.editor.diff_editor_widget import DiffEditorWidget
 from ..components.terminal.terminal_widget import TerminalWidget
 from ..components.welcome.welcome_widget import WelcomeWidget
+from ..components.toolbars.review_toolbar import ReviewToolbar
 from ..assets.icon_map import (
-    get_run_icon,
     get_stop_icon,
     get_status_icon,
     get_arrow_up_icon,
     get_arrow_down_icon,
 )
 from ..theme_manager import ThemeManager
-from ..controllers.main_controller import MainController, ClickableStatusBarWidget
+from ..controllers.main_controller import MainController
 from ..controllers.file_manager import FileManager
 from ..controllers.workspace_manager import WorkspaceManager
 from ..controllers.run_manager import RunManager
 from ..controllers.lsp_client import LSPClient
+
+
+class ClickableStatusBarWidget(QWidget):
+    """A simple QWidget that emits a 'clicked' signal on a mouse press."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class WelcomeFileExplorer(QWidget):
@@ -224,38 +235,50 @@ class MainWindow(QMainWindow):
         tab_widget = QTabWidget()
         tab_widget.setTabsClosable(True)
         tab_widget.setMovable(True)
-        self.tab_bar_toolbar = QWidget()
-        toolbar_layout = QHBoxLayout(self.tab_bar_toolbar)
-        toolbar_layout.setContentsMargins(5, 0, 5, 0)
-        toolbar_layout.setSpacing(5)
+
+        self.corner_stack = QStackedWidget()
+
+        self.normal_corner_widget = QWidget()
+        normal_layout = QHBoxLayout(self.normal_corner_widget)
+        normal_layout.setContentsMargins(5, 0, 5, 0)
+        normal_layout.setSpacing(5)
 
         self.prev_item_button = QToolButton()
         self.prev_item_button.setIcon(get_arrow_up_icon())
         self.prev_item_button.setVisible(False)
-        toolbar_layout.addWidget(self.prev_item_button)
-
         self.next_item_button = QToolButton()
         self.next_item_button.setIcon(get_arrow_down_icon())
         self.next_item_button.setVisible(False)
-        toolbar_layout.addWidget(self.next_item_button)
-
         self.run_button = QToolButton()
         self.run_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.run_button.setToolTip("Run File")
-        toolbar_layout.addWidget(self.run_button)
-        tab_widget.setCornerWidget(self.tab_bar_toolbar, Qt.Corner.TopRightCorner)
+
+        normal_layout.addWidget(self.prev_item_button)
+        normal_layout.addWidget(self.next_item_button)
+        normal_layout.addStretch()
+        normal_layout.addWidget(self.run_button)
+
+        self.review_toolbar = ReviewToolbar()
+
+        self.corner_stack.addWidget(self.normal_corner_widget)
+        self.corner_stack.addWidget(self.review_toolbar)
+
+        tab_widget.setCornerWidget(self.corner_stack, Qt.Corner.TopRightCorner)
+
         return tab_widget
 
     def add_editor_tab(self, file_path, widget):
         self.show_editor_view()
-
         is_diff = isinstance(widget, DiffEditorWidget)
         is_merge_editor = bool(widget.property("is_merge_editor"))
         is_readonly_history = getattr(widget, "metadata", {}).get(
             "is_history_view", False
         )
+        is_review_diff = getattr(widget, "is_review_diff", False)
 
-        if is_merge_editor:
+        if is_review_diff:
+            tab_title = f"Review: {os.path.basename(file_path)}"
+        elif is_merge_editor:
             tab_title = f"Resolving: {os.path.basename(file_path)}"
         elif is_diff or is_readonly_history:
             tab_title = file_path
@@ -263,17 +286,16 @@ class MainWindow(QMainWindow):
             tab_title = os.path.basename(file_path)
 
         widget.setProperty("file_path", file_path)
-
-        icon_path = file_path
-        if is_readonly_history:
-            icon_path = widget.metadata.get("original_path", file_path)
-
+        icon_path = (
+            widget.metadata.get("original_path", file_path)
+            if is_readonly_history
+            else file_path
+        )
         file_info = QFileInfo(icon_path)
         icon = self.icon_provider.icon(file_info)
 
         index = self.tab_widget.addTab(widget, icon, tab_title)
         self.tab_widget.setCurrentIndex(index)
-
         self.controller._update_ui_for_editor(widget)
 
     def get_current_editor(self):
@@ -293,32 +315,30 @@ class MainWindow(QMainWindow):
             Qt.DockWidgetArea.LeftDockWidgetArea, self.file_explorer_dock
         )
 
-        self.source_control_panel = SourceControlPanel(self.icon_provider, self)
         self.source_control_dock = QDockWidget("Source Control", self)
-        self.source_control_dock.setWidget(self.source_control_panel)
-
         sc_title_bar = QWidget()
         sc_title_layout = QHBoxLayout(sc_title_bar)
         sc_title_layout.setContentsMargins(5, 0, 5, 0)
         sc_title_layout.addWidget(QLabel("Source Control"))
         sc_title_layout.addStretch()
-
         self.git_pull_button = QToolButton()
         self.git_pull_button.setIcon(get_status_icon("arrow-down-circle"))
         self.git_pull_button.setToolTip("Pull")
-        sc_title_layout.addWidget(self.git_pull_button)
-
         self.git_push_button = QToolButton()
         self.git_push_button.setIcon(get_status_icon("arrow-up-circle"))
         self.git_push_button.setToolTip("Push")
-        sc_title_layout.addWidget(self.git_push_button)
-
         self.git_refresh_button = QToolButton()
         self.git_refresh_button.setIcon(get_status_icon("refresh-cw"))
         self.git_refresh_button.setToolTip("Fetch and Refresh Status")
+        sc_title_layout.addWidget(self.git_pull_button)
+        sc_title_layout.addWidget(self.git_push_button)
         sc_title_layout.addWidget(self.git_refresh_button)
-
         self.source_control_dock.setTitleBarWidget(sc_title_bar)
+
+        self.source_control_panel = SourceControlPanel(
+            self.icon_provider, self.source_control_dock
+        )
+        self.source_control_dock.setWidget(self.source_control_panel)
         self.tabifyDockWidget(self.file_explorer_dock, self.source_control_dock)
 
         self.conflicts_panel = ConflictsPanel(self.icon_provider, self)
@@ -337,6 +357,12 @@ class MainWindow(QMainWindow):
         self.timeline_dock.setWidget(self.timeline_panel)
         self.tabifyDockWidget(self.file_explorer_dock, self.timeline_dock)
 
+        self.review_panel = ReviewPanel(self.icon_provider, self)
+        self.review_dock = QDockWidget("Review", self)
+        self.review_dock.setWidget(self.review_panel)
+        self.review_dock.setVisible(False)
+        self.tabifyDockWidget(self.file_explorer_dock, self.review_dock)
+
         self.terminal = TerminalWidget(self)
         self.terminal_dock = QDockWidget("Terminal", self)
         self.terminal_dock.setWidget(self.terminal)
@@ -345,35 +371,28 @@ class MainWindow(QMainWindow):
         self.output_dock = QDockWidget("Output", self)
         self.output_channels = {}
         self.output_stack = QStackedWidget()
-
         output_panel_widget = QWidget()
         output_panel_layout = QVBoxLayout(output_panel_widget)
         output_panel_layout.setContentsMargins(0, 0, 0, 0)
         output_panel_layout.setSpacing(0)
-
         output_header = QWidget()
         output_header_layout = QHBoxLayout(output_header)
         output_header_layout.setContentsMargins(5, 2, 5, 2)
-
         self.output_channel_combo = QComboBox()
         output_header_layout.addWidget(self.output_channel_combo)
         output_header_layout.addStretch()
-
         self.stop_action = QAction(get_stop_icon(), "Stop Process", self)
         self.stop_action.setEnabled(False)
         stop_button = QToolButton()
         stop_button.setDefaultAction(self.stop_action)
         output_header_layout.addWidget(stop_button)
-
         self.clear_output_button = QToolButton()
         self.clear_output_button.setIcon(get_status_icon("x-circle"))
         self.clear_output_button.setToolTip("Clear Output")
         output_header_layout.addWidget(self.clear_output_button)
-
         output_panel_layout.addWidget(output_header)
         output_panel_layout.addWidget(self.output_stack)
         self.output_dock.setWidget(output_panel_widget)
-
         self.output_channel_combo.currentIndexChanged.connect(
             self.output_stack.setCurrentIndex
         )
@@ -396,6 +415,7 @@ class MainWindow(QMainWindow):
         self.setMenuBar(menu_bar)
         self._create_file_menu(menu_bar)
         self._create_edit_menu(menu_bar)
+        self.refactor_menu = menu_bar.addMenu("&Refactor")
         self._create_view_menu(menu_bar)
         self._create_go_menu(menu_bar)
         self.run_menu = menu_bar.addMenu("&Run")
@@ -425,9 +445,9 @@ class MainWindow(QMainWindow):
         self.edit_menu.addAction(QAction("&Paste", self, shortcut=QKeySequence.Paste))
 
     def _create_view_menu(self, menu_bar):
-        self.view_menu = menu_bar.addMenu("&View")
+        view_menu = menu_bar.addMenu("&View")
         appearance_menu = QMenu("Appearance", self)
-        self.view_menu.addMenu(appearance_menu)
+        view_menu.addMenu(appearance_menu)
         theme_menu = QMenu("Theme", self)
         appearance_menu.addMenu(theme_menu)
         theme_group = QActionGroup(self)
@@ -442,24 +462,25 @@ class MainWindow(QMainWindow):
             theme_group.addAction(action)
             theme_menu.addAction(action)
         appearance_menu.addSeparator()
-        self.view_menu.addSeparator()
-        self.view_menu.addAction(self.file_explorer_dock.toggleViewAction())
-        self.view_menu.addAction(self.source_control_dock.toggleViewAction())
-        self.view_menu.addAction(self.conflicts_dock.toggleViewAction())
-        self.view_menu.addAction(self.outline_dock.toggleViewAction())
-        self.view_menu.addAction(self.timeline_dock.toggleViewAction())
-        self.view_menu.addSeparator()
-        self.view_menu.addAction(self.terminal_dock.toggleViewAction())
-        self.view_menu.addAction(self.output_dock.toggleViewAction())
-        self.view_menu.addAction(self.problems_dock.toggleViewAction())
-        self.view_menu.addAction(self.debug_console_dock.toggleViewAction())
+        view_menu.addSeparator()
+        view_menu.addAction(self.file_explorer_dock.toggleViewAction())
+        view_menu.addAction(self.source_control_dock.toggleViewAction())
+        view_menu.addAction(self.conflicts_dock.toggleViewAction())
+        view_menu.addAction(self.review_dock.toggleViewAction())
+        view_menu.addAction(self.outline_dock.toggleViewAction())
+        view_menu.addAction(self.timeline_dock.toggleViewAction())
+        view_menu.addSeparator()
+        view_menu.addAction(self.terminal_dock.toggleViewAction())
+        view_menu.addAction(self.output_dock.toggleViewAction())
+        view_menu.addAction(self.problems_dock.toggleViewAction())
+        view_menu.addAction(self.debug_console_dock.toggleViewAction())
 
     def _create_go_menu(self, menu_bar):
         self.go_menu = menu_bar.addMenu("&Go")
 
     def _create_help_menu(self, menu_bar):
-        self.help_menu = menu_bar.addMenu("&Help")
-        self.help_menu.addAction(QAction("&About Forge", self))
+        help_menu = menu_bar.addMenu("&Help")
+        help_menu.addAction(QAction("&About Forge", self))
 
     def show_editor_view(self):
         if self.central_stack.currentWidget() is not self.tab_widget:
@@ -483,17 +504,13 @@ class MainWindow(QMainWindow):
             self.output_channel_combo.setItemData(
                 self.output_channel_combo.count() - 1, index
             )
-
         text_edit = self.output_channels[channel_name]
         if clear:
             text_edit.clear()
-
         text_edit.append(message)
-
         combo_index = self.output_channel_combo.findText(channel_name)
         if combo_index != -1:
             self.output_channel_combo.setCurrentIndex(combo_index)
-
         self.output_dock.setVisible(True)
         self.output_dock.raise_()
 

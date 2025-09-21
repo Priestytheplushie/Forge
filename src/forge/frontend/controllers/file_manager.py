@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QWidget
 from PySide6.QtCore import QObject, Slot, Signal
 from ..components.editor.editor_widget import EditorWidget
 from ..components.editor.diff_editor_widget import DiffEditorWidget
@@ -52,6 +52,9 @@ class FileManager(QObject):
     def get_language_id(self, file_path: str) -> str:
         return "python" if Path(file_path).suffix == ".py" else "plaintext"
 
+    def is_dirty(self, editor: QWidget) -> bool:
+        return editor in self.dirty_editors
+
     @Slot()
     def open_file_dialog(self):
         start_dir = self.workspace_path or ""
@@ -90,7 +93,6 @@ class FileManager(QObject):
 
             if self.editor_cache:
                 editor = self.editor_cache.pop()
-
                 editor.apply_theme(self.theme_manager.get_current_theme_data())
             else:
                 editor = EditorWidget(self.theme_manager.get_current_theme_data())
@@ -158,7 +160,6 @@ class FileManager(QObject):
         if editor_to_close:
             index = self.main_window.tab_widget.indexOf(editor_to_close)
             if index != -1:
-
                 self.dirty_editors.discard(editor_to_close)
                 self.handle_close_tab(index)
 

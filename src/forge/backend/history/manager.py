@@ -29,6 +29,12 @@ class HistoryManager(QObject):
             return None
 
     def record_save(self, file_path_str: str, content: str):
+        metadata = {"name": None, "pinned": False, "source": "File Save"}
+        self.record_snapshot_from_content(file_path_str, content, metadata)
+
+    def record_snapshot_from_content(
+        self, file_path_str: str, content: str, metadata: dict
+    ):
         file_path = Path(file_path_str)
         history_dir = self._get_history_path(file_path)
         if not history_dir:
@@ -60,15 +66,14 @@ class HistoryManager(QObject):
             with open(history_file, "w", encoding="utf-8") as f:
                 f.write(content)
 
-            metadata = {
+            final_metadata = {
                 "timestamp": timestamp,
                 "additions": additions,
                 "deletions": deletions,
-                "pinned": False,
-                "name": None,
             }
+            final_metadata.update(metadata)
             with open(meta_file, "w", encoding="utf-8") as f:
-                json.dump(metadata, f)
+                json.dump(final_metadata, f)
 
             print(f"[HistoryManager] Recorded snapshot: {history_file}")
             self._prune_history(history_dir)

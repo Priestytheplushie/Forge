@@ -247,14 +247,17 @@ class LSPClient(QObject):
         elif request_id in self.pending_symbol_requests:
             uri = self.pending_symbol_requests.pop(request_id)
             symbols = response.get("result", [])
+
+            active_uri = None
             if self.outline_editor and self.file_manager.open_file_paths.get(
                 self.outline_editor
             ):
-                current_uri = Path(
+                active_uri = Path(
                     self.file_manager.open_file_paths[self.outline_editor]
                 ).as_uri()
-                if uri == current_uri:
-                    self.main_window.outline_panel.update_symbols(symbols)
+
+            if uri == active_uri:
+                self.main_window.outline_panel.update_symbols(symbols)
 
     @Slot(dict)
     def handle_lsp_notification(self, notification: dict):
@@ -325,4 +328,13 @@ class LSPClient(QObject):
                 uri = Path(path).as_uri()
                 self.request_document_symbols(uri)
         else:
+            self.main_window.outline_panel.clear_symbols()
+
+    def update_outline_panel_from_uri(self, uri: str | None):
+        if uri:
+            path = str(uri_to_path(uri))
+            self.outline_editor = self.file_manager.editors_by_path.get(path)
+            self.request_document_symbols(uri)
+        else:
+            self.outline_editor = None
             self.main_window.outline_panel.clear_symbols()
