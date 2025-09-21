@@ -1,0 +1,38 @@
+{
+    "name": "Forge Dark",
+    "base": "vs-dark",
+    "inherit": true,
+    "semanticHighlighting": true,
+    "rules": [
+        {"token": "comment", "foreground": "667082", "fontStyle": "italic"},
+        {"token": "string", "foreground": "DBC855"},
+        {"token": "number", "foreground": "81A1C1"},
+        {"token": "keyword", "foreground": "D9880F", "fontStyle": "bold"},
+        {"token": "function", "foreground": "E0B841"},
+        {"token": "method", "foreground": "E0B841"},
+        {"token": "class", "foreground": "C7523B", "fontStyle": "bold"},
+        {"token": "type", "foreground": "C7523B"},
+        {"token": "parameter", "foreground": "D8DEE9", "fontStyle": "italic"},
+        {"token": "variable", "foreground": "D8DEE9"},
+        {"token": "property", "foreground": "88C0D0"},
+        {"token": "namespace", "foreground": "A3BE8C"},
+        {"token": "magicFunction", "foreground": "E0B841", "fontStyle": "italic"},
+        {"token": "selfParameter", "foreground": "D9880F"},
+        {"token": "clsParameter", "foreground": "D9880F"},
+        {"token": "decorator", "foreground": "A3BE8C"},
+        {"token": "namespace.defaultLibrary", "foreground": "88C0D0"},
+        {"token": "type.defaultLibrary", "foreground": "88C0D0"},
+        {"token": "function.defaultLibrary", "foreground": "88C0D0"},
+        {"token": "variable.defaultLibrary", "foreground": "88C0D0"}
+    ],
+    "colors": {
+        "editor.background": "#1e2127",
+        "editor.foreground": "#D8DEE9",
+        "editor.selectionBackground": "#3B4252",
+        "editor.lineHighlightBackground": "#282C34",
+        "editorCursor.foreground": "#D9880F",
+        "editorWhitespace.foreground": "#434C5E",
+        "diffEditor.insertedTextBackground": "#33663360",
+        "diffEditor.removedTextBackground": "#99333360"
+    }
+}

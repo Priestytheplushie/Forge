@@ -1,0 +1,38 @@
+{
+    "name": "VSCode Dark Plus",
+    "base": "vs-dark",
+    "inherit": true,
+    "semanticHighlighting": true,
+    "rules": [
+        {"token": "comment", "foreground": "6A9955", "fontStyle": "italic"},
+        {"token": "string", "foreground": "CE9178"},
+        {"token": "number", "foreground": "B5CEA8"},
+        {"token": "keyword", "foreground": "569CD6", "fontStyle": "bold"},
+        {"token": "function", "foreground": "DCDCAA"},
+        {"token": "method", "foreground": "DCDCAA"},
+        {"token": "class", "foreground": "4EC9B0", "fontStyle": "bold"},
+        {"token": "type", "foreground": "4EC9B0"},
+        {"token": "parameter", "foreground": "9CDCFE", "fontStyle": "italic"},
+        {"token": "variable", "foreground": "9CDCFE"},
+        {"token": "property", "foreground": "9CDCFE"},
+        {"token": "namespace", "foreground": "4EC9B0"},
+        {"token": "magicFunction", "foreground": "DCDCAA", "fontStyle": "italic"},
+        {"token": "selfParameter", "foreground": "569CD6"},
+        {"token": "clsParameter", "foreground": "569CD6"},
+        {"token": "decorator", "foreground": "C586C0"},
+        {"token": "namespace.defaultLibrary", "foreground": "4EC9B0"},
+        {"token": "type.defaultLibrary", "foreground": "4EC9B0"},
+        {"token": "function.defaultLibrary", "foreground": "DCDCAA"},
+        {"token": "variable.defaultLibrary", "foreground": "9CDCFE"}
+    ],
+    "colors": {
+        "editor.background": "#1E1E1E",
+        "editor.foreground": "#D4D4D4",
+        "editor.selectionBackground": "#264F78",
+        "editor.lineHighlightBackground": "#2A2A2A",
+        "editorCursor.foreground": "#AEAFAD",
+        "editorWhitespace.foreground": "#3B3A32",
+        "diffEditor.insertedTextBackground": "#587C0C33",
+        "diffEditor.removedTextBackground": "#94151B33"
+    }
+}

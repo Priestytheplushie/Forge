@@ -1,0 +1,36 @@
+{
+    "name": "One Dark Pro",
+    "base": "vs-dark",
+    "inherit": true,
+    "semanticHighlighting": true,
+    "rules": [
+        {"token": "comment", "foreground": "5c6370", "fontStyle": "italic"},
+        {"token": "string", "foreground": "98c379"},
+        {"token": "number", "foreground": "d19a66"},
+        {"token": "keyword", "foreground": "c678dd"},
+        {"token": "function", "foreground": "61afef"},
+        {"token": "method", "foreground": "61afef"},
+        {"token": "class", "foreground": "e5c07b"},
+        {"token": "type", "foreground": "e5c07b"},
+        {"token": "parameter", "foreground": "abb2bf", "fontStyle": "italic"},
+        {"token": "variable", "foreground": "e06c75"},
+        {"token": "property", "foreground": "abb2bf"},
+        {"token": "namespace", "foreground": "e5c07b"},
+        {"token": "decorator", "foreground": "61afef"},
+        {"token": "selfParameter", "foreground": "e06c75"},
+        {"token": "namespace.defaultLibrary", "foreground": "56b6c2"},
+        {"token": "type.defaultLibrary", "foreground": "56b6c2"},
+        {"token": "function.defaultLibrary", "foreground": "61afef"},
+        {"token": "variable.defaultLibrary", "foreground": "e06c75"}
+    ],
+    "colors": {
+        "editor.background": "#282c34",
+        "editor.foreground": "#abb2bf",
+        "editor.selectionBackground": "#3e4451",
+        "editor.lineHighlightBackground": "#2c313a",
+        "editorCursor.foreground": "#528bff",
+        "editorWhitespace.foreground": "#3b4048",
+        "diffEditor.insertedTextBackground": "#33663360",
+        "diffEditor.removedTextBackground": "#99333360"
+    }
+}

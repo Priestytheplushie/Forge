@@ -1,0 +1,36 @@
+{
+    "name": "Forge Spark",
+    "base": "vs",
+    "inherit": true,
+    "semanticHighlighting": true,
+    "rules": [
+        {"token": "comment", "foreground": "6a737d", "fontStyle": "italic"},
+        {"token": "string", "foreground": "032f62"},
+        {"token": "number", "foreground": "005cc5"},
+        {"token": "keyword", "foreground": "d73a49", "fontStyle": "bold"},
+        {"token": "function", "foreground": "6f42c1"},
+        {"token": "method", "foreground": "6f42c1"},
+        {"token": "class", "foreground": "b35900"},
+        {"token": "type", "foreground": "b35900"},
+        {"token": "parameter", "foreground": "24292e", "fontStyle": "italic"},
+        {"token": "variable", "foreground": "24292e"},
+        {"token": "property", "foreground": "005cc5"},
+        {"token": "namespace", "foreground": "b35900"},
+        {"token": "decorator", "foreground": "6f42c1"},
+        {"token": "selfParameter", "foreground": "e36209"},
+        {"token": "namespace.defaultLibrary", "foreground": "005cc5"},
+        {"token": "type.defaultLibrary", "foreground": "005cc5"},
+        {"token": "function.defaultLibrary", "foreground": "6f42c1"},
+        {"token": "variable.defaultLibrary", "foreground": "24292e"}
+    ],
+    "colors": {
+        "editor.background": "#fdfdfd",
+        "editor.foreground": "#24292e",
+        "editor.selectionBackground": "#cce5ff",
+        "editor.lineHighlightBackground": "#f1f1f1",
+        "editorCursor.foreground": "#D9880F",
+        "editorWhitespace.foreground": "#d1d5da",
+        "diffEditor.insertedTextBackground": "#a0e8a080",
+        "diffEditor.removedTextBackground": "#ffb0b080"
+    }
+}

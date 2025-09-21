@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+    <style>
+        html, body, #container {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        body {
+            background-color: #1e2127;
+        }
+        /* --- NEW: Styles for Merge Conflict Editor --- */
+        .merge-current-content {
+            background-color: rgba(64, 200, 96, 0.15); /* Greenish background */
+        }
+        .merge-incoming-content {
+            background-color: rgba(50, 150, 255, 0.15); /* Bluish background */
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+
+
+    <script>
+        window.MonacoEnvironment = {
+            getWorkerUrl: function (moduleId, label) {
+                return './vs/editor/editor.worker.js';
+            }
+        };
+    </script>
+
+    <script src="vs/loader.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
