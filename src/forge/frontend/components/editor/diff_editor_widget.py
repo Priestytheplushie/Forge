@@ -11,7 +11,6 @@ from .editor_bridge import DiffBridge
 
 
 class DiffEditorWidget(QWidget):
-
     primary_action_requested = Signal(object)
     stage_lines_requested = Signal(str)
 
@@ -107,6 +106,14 @@ class DiffEditorWidget(QWidget):
                 "original_label": original_label,
                 "modified_label": modified_label,
             }
+
+    def go_to_next_change(self):
+        if self.is_ready:
+            self.web_view.page().runJavaScript("go_to_next_change();")
+
+    def go_to_previous_change(self):
+        if self.is_ready:
+            self.web_view.page().runJavaScript("go_to_previous_change();")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

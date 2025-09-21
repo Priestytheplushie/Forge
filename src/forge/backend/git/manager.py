@@ -3,6 +3,7 @@ from pathlib import Path
 import git
 import os
 import datetime
+import time
 
 
 class CloneWorker(QThread):
@@ -11,9 +12,7 @@ class CloneWorker(QThread):
 
     def __init__(self, url, path, parent=None):
         super().__init__(parent)
-        self.url = url
-        self.path = path
-        self.result = (False, "")
+        self.url, self.path = url, path
 
     def run(self):
         try:
@@ -24,13 +23,10 @@ class CloneWorker(QThread):
 
             self.progress.emit(f"Cloning '{self.url}' into '{self.path}'...")
             git.Repo.clone_from(self.url, self.path, progress=CloneProgress())
-            self.result = (True, self.path)
             self.finished.emit(True, self.path)
         except git.GitCommandError as e:
-            self.result = (False, str(e.stderr))
             self.finished.emit(False, str(e.stderr))
         except Exception as e:
-            self.result = (False, str(e))
             self.finished.emit(False, str(e))
 
 
@@ -38,12 +34,14 @@ class GitManager(QObject):
     repo_status_changed = Signal(bool)
     status_changed = Signal(list, list)
     branch_changed = Signal(str)
+    branches_updated = Signal(dict, str)
     remote_status_changed = Signal(int, int)
     git_command_output = Signal(str)
     upstream_branch_not_found = Signal()
     merge_conflict_detected = Signal(list)
     clone_progress = Signal(str)
     clone_finished = Signal(bool, str)
+    head_commit_changed = Signal(str, str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -52,14 +50,24 @@ class GitManager(QObject):
         self.current_branch = "main"
         self.clone_worker = None
         self.is_in_merge_conflict = False
-
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setInterval(2000)
         self.refresh_timer.timeout.connect(self.refresh_status)
 
     def _log(self, message: str):
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        self.git_command_output.emit(f"[{timestamp}] {message}")
+        self.git_command_output.emit(
+            f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}"
+        )
+
+    def _get_relative_time(self, commit_time):
+        diff = time.time() - commit_time
+        if diff < 60:
+            return "just now"
+        if diff < 3600:
+            return f"{int(diff / 60)}m ago"
+        if diff < 86400:
+            return f"{int(diff / 3600)}h ago"
+        return f"{int(diff / 86400)}d ago"
 
     @Slot(str)
     def set_workspace_path(self, path: str):
@@ -74,30 +82,26 @@ class GitManager(QObject):
         except git.InvalidGitRepositoryError:
             self.repo = None
             self.repo_status_changed.emit(False)
+            self.branches_updated.emit({}, "")
         except Exception as e:
             self._log(f"Error initializing Git: {e}")
             self.repo = None
             self.repo_status_changed.emit(False)
+            self.branches_updated.emit({}, "")
 
     @Slot()
     def refresh_status(self):
         if not self.repo or not self.repo.git_dir:
             return
-
-        is_merging_now = (Path(self.repo.git_dir) / "MERGE_HEAD").exists()
-        if is_merging_now:
-            unresolved_paths = set()
-            staged_paths = set()
-
-            status_output = self.repo.git.status("--porcelain")
-            for line in status_output.strip().split("\n"):
+        self.get_all_branches()
+        if (Path(self.repo.git_dir) / "MERGE_HEAD").exists():
+            unresolved, staged = set(), set()
+            for line in self.repo.git.status("--porcelain").strip().split("\n"):
                 if not line:
                     continue
-
                 status, path = line[:2], line[3:]
                 if status in ("DD", "AU", "UD", "UA", "DU", "AA", "UU"):
-                    unresolved_paths.add(path)
-
+                    unresolved.add(path)
                 if status[0] != " " and status not in (
                     "DD",
                     "AU",
@@ -107,26 +111,27 @@ class GitManager(QObject):
                     "AA",
                     "UU",
                 ):
-                    staged_paths.add(path)
-
-            unresolved_paths = {
-                p for p in unresolved_paths if not p.startswith(".forge/")
-            }
-            staged_paths = {p for p in staged_paths if not p.startswith(".forge/")}
-
+                    staged.add(path)
+            unresolved = {p for p in unresolved if not p.startswith(".forge/")}
+            staged = {p for p in staged if not p.startswith(".forge/")}
             if not self.is_in_merge_conflict:
                 self._log("Merge conflict state detected.")
                 self.is_in_merge_conflict = True
-                self.merge_conflict_detected.emit(sorted(list(unresolved_paths)))
-
-            self.status_changed.emit(
-                sorted(list(staged_paths)), sorted(list(unresolved_paths))
-            )
+                self.merge_conflict_detected.emit(sorted(list(unresolved)))
+            self.status_changed.emit(sorted(list(staged)), sorted(list(unresolved)))
             return
         elif self.is_in_merge_conflict:
             self.is_in_merge_conflict = False
-
         try:
+            try:
+                head_commit = self.repo.head.commit
+                self.head_commit_changed.emit(
+                    head_commit.author.name,
+                    self._get_relative_time(head_commit.committed_date),
+                    head_commit.hexsha[:7],
+                )
+            except ValueError:
+                self.head_commit_changed.emit("", "", "")
             self.current_branch = self.repo.active_branch.name
             self.branch_changed.emit(self.current_branch)
             tracking_branch = self.repo.active_branch.tracking_branch()
@@ -153,19 +158,182 @@ class GitManager(QObject):
             return
         except Exception:
             self.remote_status_changed.emit(0, 0)
-
-        staged_changes = [
-            {"path": diff.a_path or diff.b_path, "status": diff.change_type}
-            for diff in self.repo.index.diff("HEAD", R=True)
+        staged = [
+            {"path": d.a_path or d.b_path, "status": d.change_type}
+            for d in self.repo.index.diff("HEAD", R=True)
         ]
-        unstaged_changes = [
-            {"path": diff.a_path or diff.b_path, "status": diff.change_type}
-            for diff in self.repo.index.diff(None)
+        unstaged = [
+            {"path": d.a_path or d.b_path, "status": d.change_type}
+            for d in self.repo.index.diff(None)
         ]
         for path in self.repo.untracked_files:
             if not self.repo.ignored(path):
-                unstaged_changes.append({"path": path, "status": "A"})
-        self.status_changed.emit(staged_changes, unstaged_changes)
+                unstaged.append({"path": path, "status": "A"})
+        self.status_changed.emit(staged, unstaged)
+
+    def get_file_commit_history(self, file_path_str: str) -> list:
+        if not self.repo or not file_path_str:
+            return []
+        try:
+            relative_path = Path(file_path_str).relative_to(self.repo.working_dir)
+            commits = list(self.repo.iter_commits(paths=str(relative_path)))
+            history = []
+            for commit in commits:
+                history.append(
+                    {
+                        "sha": commit.hexsha,
+                        "author": commit.author.name,
+                        "timestamp": commit.committed_date * 1000,
+                        "message": commit.summary,
+                    }
+                )
+            return history
+        except Exception as e:
+            self._log(f"Error getting commit history for {file_path_str}: {e}")
+            return []
+
+    def get_commit_diff(self, file_path_str: str, sha: str) -> tuple[str, str]:
+        if not self.repo:
+            return ("", "")
+        try:
+            commit = self.repo.commit(sha)
+            relative_path = str(Path(file_path_str).relative_to(self.repo.working_dir))
+            modified_content = self.repo.git.show(f"{sha}:{relative_path}")
+            original_content = ""
+            if commit.parents:
+                parent_sha = commit.parents[0].hexsha
+                try:
+                    original_content = self.repo.git.show(
+                        f"{parent_sha}:{relative_path}"
+                    )
+                except git.GitCommandError:
+                    original_content = ""
+            return (original_content, modified_content)
+        except Exception as e:
+            self._log(f"Error getting commit diff: {e}")
+            return ("", "")
+
+    def get_all_branches(self):
+        if not self.repo:
+            return
+        try:
+            all_branches = {"local": [], "remote": []}
+            current_branch_name = self.repo.active_branch.name
+            for head in self.repo.heads:
+                all_branches["local"].append((head.name, "up-to-date"))
+            for remote in self.repo.remotes:
+                for ref in remote.refs:
+                    if ref.name != f"{remote.name}/HEAD":
+                        all_branches["remote"].append((ref.name, "up-to-date"))
+            self.branches_updated.emit(all_branches, current_branch_name)
+        except Exception as e:
+            self._log(f"Error fetching branches: {e}")
+            self.branches_updated.emit({}, "")
+
+    @Slot(str)
+    def checkout_branch(self, branch_name: str):
+        if not self.repo:
+            return
+        try:
+            self._log(f"Checking out branch '{branch_name}'...")
+            self.repo.git.checkout(branch_name)
+            self._log("Checkout successful.")
+            self.refresh_status()
+        except git.GitCommandError as e:
+            self._log(f"Error checking out branch: {e.stderr.strip()}")
+        except Exception as e:
+            self._log(f"An unexpected error occurred during checkout: {e}")
+
+    @Slot(str, str)
+    def create_branch(self, name: str, base: str):
+        if not self.repo:
+            return
+        try:
+            self._log(f"Creating new branch '{name}' from '{base}'...")
+            new_branch = self.repo.create_head(name, base)
+            new_branch.checkout()
+            self._log(f"Successfully created and switched to branch '{name}'.")
+            self.refresh_status()
+        except git.GitCommandError as e:
+            self._log(f"Error creating branch: {e.stderr.strip()}")
+        except Exception as e:
+            self._log(f"An unexpected error occurred during branch creation: {e}")
+
+    @Slot(str, bool, str)
+    def merge_branch(self, target_branch: str, squash: bool = False, message: str = ""):
+        if not self.repo:
+            return
+        try:
+            self._log(f"Merging '{target_branch}' into '{self.current_branch}'...")
+            args = ["--no-ff"]
+            if squash:
+                args.append("--squash")
+            self.repo.git.merge(target_branch, *args)
+            if squash:
+                self.repo.index.commit(message)
+                self._log("Squash merge successful.")
+            else:
+                if message:
+                    self.repo.index.commit(message)
+                self._log("Merge command successful.")
+            self.refresh_status()
+        except git.GitCommandError as e:
+            if "merge conflict" in e.stderr.lower():
+                self._log(f"Merge conflict detected. Please resolve conflicts.")
+                self.refresh_status()
+            else:
+                self._log(f"Error merging: {e.stderr.strip()}")
+
+    @Slot(str)
+    def rebase_branch(self, target_branch: str):
+        if not self.repo:
+            return
+        try:
+            self._log(f"Rebasing '{self.current_branch}' onto '{target_branch}'...")
+            self.repo.git.rebase(target_branch)
+            self._log("Rebase successful.")
+            self.refresh_status()
+        except git.GitCommandError as e:
+            if (
+                "merge conflict" in e.stderr.lower()
+                or "could not apply" in e.stderr.lower()
+            ):
+                self._log(
+                    f"Rebase conflict detected. Please resolve conflicts and continue or abort."
+                )
+                self.refresh_status()
+            else:
+                self._log(f"Error rebasing: {e.stderr.strip()}")
+
+    @Slot(str, str)
+    def rename_branch(self, old_name: str, new_name: str):
+        if not self.repo:
+            return
+        try:
+            self._log(f"Renaming branch '{old_name}' to '{new_name}'...")
+            self.repo.git.branch("-m", old_name, new_name)
+            self._log("Rename successful.")
+            self.refresh_status()
+        except git.GitCommandError as e:
+            self._log(f"Error renaming branch: {e.stderr.strip()}")
+
+    @Slot(str, bool)
+    def delete_branch(self, branch_name: str, is_remote: bool):
+        if not self.repo:
+            return
+        try:
+            if is_remote:
+                remote_name, remote_branch_name = branch_name.split("/", 1)
+                self._log(f"Deleting remote branch '{branch_name}'...")
+                self.repo.git.push(remote_name, "--delete", remote_branch_name)
+                self._log("Remote branch deleted successfully.")
+            else:
+                self._log(f"Deleting local branch '{branch_name}'...")
+                self.repo.git.branch("-d", branch_name)
+                self._log("Local branch deleted successfully.")
+            self.refresh_status()
+        except git.GitCommandError as e:
+            self._log(f"Error deleting branch: {e.stderr.strip()}")
 
     def initialize_repo(self):
         if self.workspace_path and not self.repo:
@@ -304,13 +472,13 @@ class GitManager(QObject):
         if not self.repo:
             return
         try:
-            if self.is_in_merge_conflict:
-                unmerged = self.repo.index.unmerged_blobs()
-                if unmerged:
-                    self._log(
-                        f"Error: Cannot commit. You still have {len(unmerged)} unresolved conflicts."
-                    )
-                    return
+
+            unmerged_blobs = self.repo.index.unmerged_blobs()
+            if self.is_in_merge_conflict and unmerged_blobs:
+                self._log(
+                    f"Error: Cannot commit. You still have {len(unmerged_blobs)} unresolved conflicts."
+                )
+                return
             if stage_all:
                 self.repo.git.add(A=True)
             self.repo.index.commit(message)

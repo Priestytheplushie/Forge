@@ -85,6 +85,9 @@ class GitStatusItemWidget(QWidget):
 
 class SourceControlPanel(QWidget):
     file_selected = Signal(str, str)
+    open_file_requested = Signal(str)
+    show_history_requested = Signal(str)
+    reveal_in_explorer_requested = Signal(str)
     discard_changes_requested = Signal(list)
     stage_requested = Signal(list)
     unstage_requested = Signal(list)
@@ -248,11 +251,9 @@ class SourceControlPanel(QWidget):
             status = (
                 file_info.get("status", "U") if isinstance(file_info, dict) else "U"
             )
-
             item = QListWidgetItem(list_widget)
-
             if is_merge_view:
-                custom_widget = GitStatusItemWidget(
+                widget = GitStatusItemWidget(
                     self.icon_provider,
                     path,
                     status,
@@ -264,12 +265,11 @@ class SourceControlPanel(QWidget):
                     {"path": path, "status": "M" if is_resolved_list else "U"},
                 )
             else:
-                custom_widget = GitStatusItemWidget(self.icon_provider, path, status)
+                widget = GitStatusItemWidget(self.icon_provider, path, status)
                 item.setData(Qt.ItemDataRole.UserRole, {"path": path, "status": status})
-
-            item.setSizeHint(custom_widget.sizeHint())
+            item.setSizeHint(widget.sizeHint())
             list_widget.addItem(item)
-            list_widget.setItemWidget(item, custom_widget)
+            list_widget.setItemWidget(item, widget)
 
     @Slot(bool)
     def set_repo_status(self, has_repo: bool):
@@ -296,14 +296,12 @@ class SourceControlPanel(QWidget):
             )
             self.commit_merge_button.setEnabled(len(unstaged_files) == 0)
             return
-
         self.current_staged_files = [
             f.get("path") if isinstance(f, dict) else f for f in staged_files
         ]
         self.current_unstaged_files = [
             f.get("path") if isinstance(f, dict) else f for f in unstaged_files
         ]
-
         show_staged = bool(staged_files)
         self.staged_header_widget.setVisible(show_staged)
         self.staged_list.setVisible(show_staged)
@@ -315,8 +313,9 @@ class SourceControlPanel(QWidget):
         self._update_commit_button_state()
 
     def _update_commit_button_state(self, action=None):
-        has_staged = bool(self.current_staged_files)
-        has_unstaged = bool(self.current_unstaged_files)
+        has_staged, has_unstaged = bool(self.current_staged_files), bool(
+            self.current_unstaged_files
+        )
         if not self.commit_action_group.checkedAction():
             self.commit_action.setChecked(True)
         selected_action = self.commit_action_group.checkedAction()
@@ -339,12 +338,13 @@ class SourceControlPanel(QWidget):
         self.commit_button.setEnabled(has_staged or has_unstaged)
 
     def on_commit_button_clicked(self):
-        is_stage_all = not self.current_staged_files and self.current_unstaged_files
-        if is_stage_all:
+        if not self.current_staged_files and self.current_unstaged_files:
             self.stage_all_requested.emit()
             return
-        selected_action = self.commit_action_group.checkedAction()
-        message = self.commit_message_box.toPlainText().strip()
+        selected_action, message = (
+            self.commit_action_group.checkedAction(),
+            self.commit_message_box.toPlainText().strip(),
+        )
         if selected_action is self.stash_action:
             self.stash_requested.emit(message)
             self.commit_message_box.clear()
@@ -376,11 +376,20 @@ class SourceControlPanel(QWidget):
         is_staged = sender_list is self.staged_list
         menu = QMenu(self)
         if len(selected_items) == 1:
+            file_path = file_paths[0]
+            status = selected_items[0].data(Qt.ItemDataRole.UserRole)["status"]
             menu.addAction("Open Changes").triggered.connect(
-                lambda: self.file_selected.emit(
-                    file_paths[0],
-                    selected_items[0].data(Qt.ItemDataRole.UserRole)["status"],
-                )
+                lambda: self.file_selected.emit(file_path, status)
+            )
+            menu.addAction("Open File").triggered.connect(
+                lambda: self.open_file_requested.emit(file_path)
+            )
+            menu.addSeparator()
+            menu.addAction("File History").triggered.connect(
+                lambda: self.show_history_requested.emit(file_path)
+            )
+            menu.addAction("Reveal in File Explorer").triggered.connect(
+                lambda: self.reveal_in_explorer_requested.emit(file_path)
             )
             menu.addSeparator()
         if is_staged:

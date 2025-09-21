@@ -31,7 +31,10 @@ class ConflictsPanel(QWidget):
     def update_conflicts(self, conflicted_files: list):
         """Populates the list with conflicted files."""
         self.conflicts_list.clear()
-        for file_path in sorted(conflicted_files):
+
+        paths = [f.get("path") if isinstance(f, dict) else f for f in conflicted_files]
+
+        for file_path in sorted(paths):
             item = QListWidgetItem(self.unresolved_icon, file_path)
             self.conflicts_list.addItem(item)
 

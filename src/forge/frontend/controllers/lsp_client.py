@@ -83,7 +83,6 @@ class LSPClient(QObject):
         editor.text_changed.connect(
             lambda editor=editor, uri=uri: self.on_editor_text_changed(editor, uri)
         )
-
         editor.completion_requested.connect(self.on_completion_requested)
         editor.hover_requested.connect(self.on_hover_requested)
         editor.cursor_position_changed.connect(self.on_cursor_position_changed)

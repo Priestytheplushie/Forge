@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QComboBox,
 )
-from PySide6.QtCore import Qt, QFileInfo, Slot
+from PySide6.QtCore import Qt, QFileInfo, Slot, Signal
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QActionGroup
 import os
 
@@ -31,9 +31,15 @@ from ..components.editor.editor_widget import EditorWidget
 from ..components.editor.diff_editor_widget import DiffEditorWidget
 from ..components.terminal.terminal_widget import TerminalWidget
 from ..components.welcome.welcome_widget import WelcomeWidget
-from ..assets.icon_map import get_run_icon, get_stop_icon, get_status_icon
+from ..assets.icon_map import (
+    get_run_icon,
+    get_stop_icon,
+    get_status_icon,
+    get_arrow_up_icon,
+    get_arrow_down_icon,
+)
 from ..theme_manager import ThemeManager
-from ..controllers.main_controller import MainController
+from ..controllers.main_controller import MainController, ClickableStatusBarWidget
 from ..controllers.file_manager import FileManager
 from ..controllers.workspace_manager import WorkspaceManager
 from ..controllers.run_manager import RunManager
@@ -104,24 +110,41 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
 
+        self.git_branch_widget = ClickableStatusBarWidget()
+        self.git_branch_widget.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.git_branch_widget.setToolTip(
+            "Current branch. Click to view all branches or create a new one."
+        )
+        git_layout = QHBoxLayout(self.git_branch_widget)
+        git_layout.setContentsMargins(5, 0, 5, 0)
+        git_layout.setSpacing(3)
         self.git_status_icon_label = QLabel()
         self.git_status_icon_label.setPixmap(
             get_status_icon("git-branch").pixmap(16, 16)
         )
         self.git_branch_label = QLabel("main")
-        self.git_branch_label.setToolTip("Current Git Branch")
-        git_widget = QWidget()
-        git_layout = QHBoxLayout(git_widget)
-        git_layout.setContentsMargins(5, 0, 5, 0)
-        git_layout.setSpacing(3)
         git_layout.addWidget(self.git_status_icon_label)
         git_layout.addWidget(self.git_branch_label)
-
         self.git_remote_status_label = QLabel()
         self.git_remote_status_label.setToolTip("Commits ahead/behind remote branch")
         git_layout.addWidget(self.git_remote_status_label)
 
-        self.status_bar.addWidget(git_widget)
+        self.commit_info_widget = QWidget()
+        commit_layout = QHBoxLayout(self.commit_info_widget)
+        commit_layout.setContentsMargins(5, 0, 5, 0)
+        commit_layout.setSpacing(3)
+        self.commit_icon_label = QLabel()
+        self.commit_icon_label.setPixmap(get_status_icon("git-commit").pixmap(16, 16))
+        self.commit_info_label = QLabel()
+        self.commit_info_label.setToolTip("Latest commit details")
+        commit_layout.addWidget(self.commit_icon_label)
+        commit_layout.addWidget(self.commit_info_label)
+
+        self.status_bar.addWidget(self.git_branch_widget)
+        self.status_bar.addWidget(self.commit_info_widget)
+
+        self.git_branch_widget.setVisible(False)
+        self.commit_info_widget.setVisible(False)
 
         right_widget = QWidget()
         right_layout = QHBoxLayout(right_widget)
@@ -204,6 +227,17 @@ class MainWindow(QMainWindow):
         toolbar_layout = QHBoxLayout(self.tab_bar_toolbar)
         toolbar_layout.setContentsMargins(5, 0, 5, 0)
         toolbar_layout.setSpacing(5)
+
+        self.prev_item_button = QToolButton()
+        self.prev_item_button.setIcon(get_arrow_up_icon())
+        self.prev_item_button.setVisible(False)
+        toolbar_layout.addWidget(self.prev_item_button)
+
+        self.next_item_button = QToolButton()
+        self.next_item_button.setIcon(get_arrow_down_icon())
+        self.next_item_button.setVisible(False)
+        toolbar_layout.addWidget(self.next_item_button)
+
         self.run_button = QToolButton()
         self.run_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.run_button.setToolTip("Run File")
@@ -213,24 +247,27 @@ class MainWindow(QMainWindow):
 
     def add_editor_tab(self, file_path, widget):
         self.show_editor_view()
+
         is_diff = isinstance(widget, DiffEditorWidget)
-        is_readonly = getattr(widget, "metadata", {}).get("is_history_view", False)
-        is_merge_editor = getattr(widget, "property", lambda p: False)(
-            "is_merge_editor"
+        is_merge_editor = bool(widget.property("is_merge_editor"))
+        is_readonly_history = getattr(widget, "metadata", {}).get(
+            "is_history_view", False
         )
 
-        if is_diff or is_readonly:
-            tab_title = file_path
-        elif is_merge_editor:
+        if is_merge_editor:
             tab_title = f"Resolving: {os.path.basename(file_path)}"
+        elif is_diff or is_readonly_history:
+            tab_title = file_path
         else:
             tab_title = os.path.basename(file_path)
 
         widget.setProperty("file_path", file_path)
 
-        file_info = QFileInfo(
-            file_path if not is_readonly else widget.metadata["original_path"]
-        )
+        icon_path = file_path
+        if is_readonly_history:
+            icon_path = widget.metadata.get("original_path", file_path)
+
+        file_info = QFileInfo(icon_path)
         icon = self.icon_provider.icon(file_info)
 
         index = self.tab_widget.addTab(widget, icon, tab_title)

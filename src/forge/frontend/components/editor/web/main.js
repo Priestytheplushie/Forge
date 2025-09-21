@@ -11,6 +11,9 @@ const pending_conflict_checks = new Map();
 let currentMergeDecorations = [];
 
 
+let diffChanges = [];
+let currentDiffIndex = -1;
+
 function init() {
     console.log("[JS] Bridge is ready, initializing Monaco...");
 
@@ -99,6 +102,14 @@ function initialize_editor(themeData, isDiffEditor = false) {
             originalEditable: false,
             readOnly: true,
         });
+
+
+        editor.onDidUpdateDiff(() => {
+            diffChanges = editor.getLineChanges() || [];
+            currentDiffIndex = -1;
+            console.log(`[JS] Diff updated. Found ${diffChanges.length} changes.`);
+        });
+
         const addStageAction = (ed, isModified) => {
             ed.addAction({
                 id: `forge-stage-lines-${isModified ? 'modified' : 'original'}`,
@@ -267,3 +278,38 @@ function layout_editor() { if (editor) editor.layout(); }
 function set_diagnostics(markers) { if (editor && editor.getModel()) { monaco.editor.setModelMarkers(editor.getModel(), 'forge-diagnostics', markers || []); } }
 function jump_and_highlight(line, char) { if (editor) { const position = { lineNumber: line, column: char }; editor.setPosition(position); editor.revealLineInCenter(line); const model = editor.getModel(); if (model) { const range = { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: model.getLineMaxColumn(line) }; editor.setSelection(range); } editor.focus(); } }
 function lsp_kind_to_monaco_kind(kind) { const map = monaco.languages.CompletionItemKind; switch (kind) { case 1: return map.Text; case 2: return map.Method; case 3: return map.Function; case 4: return map.Constructor; case 5: return map.Field; case 6: return map.Variable; case 7: return map.Class; case 8: return map.Interface; case 9: return map.Module; case 10: return map.Property; case 11: return map.Unit; case 12: return map.Value; case 13: return map.Enum; case 14: return map.Keyword; case 15: return map.Snippet; case 16: return map.Color; case 17: return map.File; case 18: return map.Reference; case 19: return map.Folder; case 20: return map.EnumMember; case 21: return map.Constant; case 22: return map.Struct; case 23: return map.Event; case 24: return map.Operator; case 25: return map.TypeParameter; default: return map.Text; } }
+
+
+function go_to_next_change() {
+    if (!editor || diffChanges.length === 0) return;
+    currentDiffIndex++;
+    if (currentDiffIndex >= diffChanges.length) {
+        currentDiffIndex = 0; 
+    }
+    const change = diffChanges[currentDiffIndex];
+    if (change) {
+        const modifiedEditor = editor.getModifiedEditor();
+        const targetLine = change.modifiedStartLineNumber;
+        editor.revealLineInCenter(targetLine, monaco.editor.ScrollType.Smooth);
+        const range = { startLineNumber: targetLine, startColumn: 1, endLineNumber: targetLine, endColumn: modifiedEditor.getModel().getLineMaxColumn(targetLine) };
+        modifiedEditor.setSelection(range);
+        modifiedEditor.focus();
+    }
+}
+
+function go_to_previous_change() {
+    if (!editor || diffChanges.length === 0) return;
+    currentDiffIndex--;
+    if (currentDiffIndex < 0) {
+        currentDiffIndex = diffChanges.length - 1; 
+    }
+    const change = diffChanges[currentDiffIndex];
+    if (change) {
+        const modifiedEditor = editor.getModifiedEditor();
+        const targetLine = change.modifiedStartLineNumber;
+        editor.revealLineInCenter(targetLine, monaco.editor.ScrollType.Smooth);
+        const range = { startLineNumber: targetLine, startColumn: 1, endLineNumber: targetLine, endColumn: modifiedEditor.getModel().getLineMaxColumn(targetLine) };
+        modifiedEditor.setSelection(range);
+        modifiedEditor.focus();
+    }
+}

@@ -2,6 +2,7 @@ import os
 import time
 import json
 import difflib
+import shutil
 from pathlib import Path
 from PySide6.QtCore import QObject
 
@@ -77,11 +78,9 @@ class HistoryManager(QObject):
     def _prune_history(self, history_dir: Path):
         try:
             snapshots_with_meta = self.get_history_for_file(str(history_dir))
-
             unpinned = [
                 (p, m) for p, m in snapshots_with_meta if not m.get("pinned", False)
             ]
-
             if len(unpinned) > LOCAL_HISTORY_CAP:
                 to_delete = sorted(unpinned, key=lambda item: item[1]["timestamp"])
                 for old_path, _ in to_delete[: len(unpinned) - LOCAL_HISTORY_CAP]:
@@ -149,3 +148,15 @@ class HistoryManager(QObject):
             print(f"[HistoryManager] Deleted snapshot {snapshot_path}")
         except Exception as e:
             print(f"[HistoryManager] Error deleting snapshot {history_file_path}: {e}")
+
+    def delete_all_snapshots(self, file_path_str: str):
+        file_path = Path(file_path_str)
+        history_dir = self._get_history_path(file_path)
+        if history_dir and history_dir.exists():
+            try:
+                shutil.rmtree(history_dir)
+                print(f"[HistoryManager] Deleted all snapshots for {file_path_str}")
+            except Exception as e:
+                print(
+                    f"[HistoryManager] Error deleting all snapshots for {file_path_str}: {e}"
+                )

@@ -1,5 +1,5 @@
-from PySide6.QtGui import QIcon, QPainter, QColor
-from PySide6.QtCore import QSize
+from PySide6.QtGui import QIcon, QPainter, QColor, QTransform, QPixmap
+from PySide6.QtCore import QSize, Qt
 from pathlib import Path
 
 KIND_FILE = 1
@@ -78,6 +78,32 @@ def _get_colorized_icon(icon_filename: str, color: QColor) -> QIcon:
     return colorized_icon
 
 
+def get_rotated_icon(icon_filename: str, color: QColor, degrees: int) -> QIcon:
+    """Creates and caches a rotated version of an icon."""
+    cache_key = (icon_filename, color.name(), degrees)
+    if cache_key in _icon_cache:
+        return _icon_cache[cache_key]
+
+    base_pixmap = _get_colorized_icon(icon_filename, color).pixmap(QSize(16, 16))
+
+    size = max(base_pixmap.width(), base_pixmap.height())
+    rotated_pixmap = QPixmap(size, size)
+    rotated_pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(rotated_pixmap)
+
+    painter.translate(size / 2, size / 2)
+    painter.rotate(degrees)
+
+    painter.translate(-base_pixmap.width() / 2, -base_pixmap.height() / 2)
+    painter.drawPixmap(0, 0, base_pixmap)
+    painter.end()
+
+    rotated_icon = QIcon(rotated_pixmap)
+    _icon_cache[cache_key] = rotated_icon
+    return rotated_icon
+
+
 def get_icon_for_symbol(kind: int) -> QIcon:
     """Gets a colorized QIcon for a given LSP DocumentSymbolKind."""
     meta = SYMBOL_META_DATA.get(kind, SYMBOL_META_DATA[KIND_KEYWORD])
@@ -101,8 +127,14 @@ def get_status_icon(name: str, color: str = "#D8DEE9") -> QIcon:
     return _get_colorized_icon(f"{name}.svg", QColor(color))
 
 
+def get_commit_icon(rotated: bool = False) -> QIcon:
+    color = QColor("#81A1C1")
+    if rotated:
+        return get_rotated_icon("git-commit.svg", color, 90)
+    return _get_colorized_icon("git-commit.svg", color)
+
+
 def get_bookmark_icon() -> QIcon:
-    """Gets the colorized 'bookmark' icon for pinned history items."""
     return _get_colorized_icon("bookmark.svg", QColor("#DDB451"))
 
 
@@ -112,6 +144,26 @@ def get_resolved_icon() -> QIcon:
 
 def get_unresolved_icon() -> QIcon:
     return _get_colorized_icon("alert-triangle.svg", QColor("#DDB451"))
+
+
+def get_arrow_up_icon() -> QIcon:
+    return _get_colorized_icon("arrow-up.svg", QColor("#D8DEE9"))
+
+
+def get_arrow_down_icon() -> QIcon:
+    return _get_colorized_icon("arrow-down.svg", QColor("#D8DEE9"))
+
+
+def get_cloud_icon() -> QIcon:
+    return _get_colorized_icon("cloud.svg", QColor("#D8DEE9"))
+
+
+def get_check_icon() -> QIcon:
+    return _get_colorized_icon("check.svg", QColor("#6AF699"))
+
+
+def get_trash_icon() -> QIcon:
+    return _get_colorized_icon("trash-2.svg", QColor("#F77669"))
 
 
 def get_tooltip_for_symbol(kind: int) -> str:

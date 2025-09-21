@@ -318,6 +318,11 @@ class EditorWidget(QWidget):
                 monaco_severity = 4
             elif lsp_severity == 3:
                 monaco_severity = 2
+
+            code_val = diag.get("code")
+            if code_val is not None:
+                code_val = str(code_val)
+
             markers.append(
                 {
                     "startLineNumber": start_line,
@@ -326,7 +331,7 @@ class EditorWidget(QWidget):
                     "endColumn": end_col,
                     "message": diag["message"],
                     "severity": monaco_severity,
-                    "code": diag.get("code"),
+                    "code": code_val,
                 }
             )
         self.web_view.page().runJavaScript(f"set_diagnostics({json.dumps(markers)});")

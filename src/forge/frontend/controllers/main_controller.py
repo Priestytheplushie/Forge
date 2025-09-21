@@ -1,22 +1,36 @@
-from PySide6.QtCore import QObject, Slot, QTimer, QTime, QMimeData
+from PySide6.QtCore import QObject, Slot, QTimer, QTime, QMimeData, QPoint, Signal, QUrl
 from PySide6.QtWidgets import (
     QMessageBox,
     QInputDialog,
     QFileDialog,
     QWidget,
     QApplication,
+    QStyle,
 )
+from PySide6.QtGui import QCursor, QDesktopServices
 from pathlib import Path
 
 from forge.frontend.components.editor.editor_widget import EditorWidget
 from forge.frontend.components.editor.diff_editor_widget import DiffEditorWidget
 from forge.frontend.windows.clone_dialog import CloneDialog
+from forge.frontend.windows.create_branch_dialog import CreateBranchDialog
+from forge.frontend.windows.action_confirmation_dialog import ActionConfirmationDialog
+from forge.frontend.windows.branch_operations_studio import BranchOperationsStudio
+from forge.frontend.components.menus.branch_menu import BranchMenu
 from forge.backend.history.manager import HistoryManager
 from forge.backend.git.manager import GitManager
 from forge.frontend.controllers.lsp_client import LSPClient
 
 AUTOSAVE_ENABLED = True
 AUTOSAVE_DELAY_MS = 3000
+
+
+class ClickableStatusBarWidget(QWidget):
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class MainController(QObject):
@@ -30,26 +44,50 @@ class MainController(QObject):
         lsp_client,
     ):
         super().__init__(main_window)
-        self.main_window = main_window
-        self.theme_manager = theme_manager
-        self.file_manager = file_manager
-        self.workspace_manager = workspace_manager
-        self.run_manager = run_manager
-        self.lsp_client = lsp_client
-        self.history_manager = HistoryManager(self)
-        self.git_manager = GitManager(self)
+        self.main_window, self.theme_manager, self.file_manager = (
+            main_window,
+            theme_manager,
+            file_manager,
+        )
+        self.workspace_manager, self.run_manager, self.lsp_client = (
+            workspace_manager,
+            run_manager,
+            lsp_client,
+        )
+        self.history_manager, self.git_manager = HistoryManager(self), GitManager(self)
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setSingleShot(True)
         self.autosave_timer.setInterval(AUTOSAVE_DELAY_MS)
-
         self.in_merge_conflict_mode = False
-
+        self.branch_data_cache, self.current_branch_cache = {}, ""
+        self.branch_menu = BranchMenu(self.main_window)
         self._connect_signals()
         self._initialize_ui_state()
 
     def _connect_signals(self):
+        self.branch_menu.checkout_requested.connect(self.git_manager.checkout_branch)
+        self.branch_menu.create_branch_requested.connect(
+            self.on_create_branch_requested
+        )
+        self.branch_menu.manage_branches_requested.connect(
+            self.on_manage_branches_requested
+        )
+        self.branch_menu.merge_requested.connect(self.on_merge_branch_requested)
+        self.branch_menu.squash_merge_requested.connect(
+            lambda branch: self.on_merge_branch_requested(branch, squash=True)
+        )
+        self.branch_menu.rebase_requested.connect(self.on_rebase_branch_requested)
+        self.branch_menu.rename_requested.connect(self.on_rename_branch_requested)
+        self.branch_menu.delete_local_requested.connect(
+            lambda branch: self.on_delete_branch_requested(branch, is_remote=False)
+        )
+        self.branch_menu.delete_remote_requested.connect(
+            lambda branch: self.on_delete_branch_requested(branch, is_remote=True)
+        )
+
         sc_panel = self.main_window.source_control_panel
         self.git_manager.repo_status_changed.connect(sc_panel.set_repo_status)
+        self.git_manager.repo_status_changed.connect(self.on_repo_status_changed)
         self.git_manager.status_changed.connect(sc_panel.update_files)
         self.git_manager.status_changed.connect(
             self.on_git_status_changed_for_conflicts
@@ -57,6 +95,7 @@ class MainController(QObject):
         self.git_manager.branch_changed.connect(
             self.main_window.git_branch_label.setText
         )
+        self.git_manager.branches_updated.connect(self.on_branches_updated)
         self.git_manager.remote_status_changed.connect(
             self.on_git_remote_status_changed
         )
@@ -69,8 +108,12 @@ class MainController(QObject):
         self.git_manager.merge_conflict_detected.connect(
             self.on_merge_conflict_detected
         )
+        self.git_manager.head_commit_changed.connect(self.on_head_commit_changed)
 
         sc_panel.file_selected.connect(self.on_git_file_selected)
+        sc_panel.open_file_requested.connect(self.on_open_file_from_git)
+        sc_panel.show_history_requested.connect(self.on_show_history_from_git)
+        sc_panel.reveal_in_explorer_requested.connect(self.on_reveal_in_explorer)
         sc_panel.discard_changes_requested.connect(self.on_git_discard_changes)
         sc_panel.stage_requested.connect(self.git_manager.stage_files)
         sc_panel.unstage_requested.connect(self.git_manager.unstage_files)
@@ -87,71 +130,72 @@ class MainController(QObject):
         self.main_window.welcome_file_explorer.clone_repo_button.clicked.connect(
             self.on_clone_repo_requested
         )
-
         self.main_window.git_refresh_button.clicked.connect(self.git_manager.fetch)
         self.main_window.git_pull_button.clicked.connect(self.git_manager.pull)
         self.main_window.git_push_button.clicked.connect(self.git_manager.push)
-
+        self.main_window.git_branch_widget.clicked.connect(
+            self.on_branch_menu_requested
+        )
         self.main_window.conflicts_panel.file_selected.connect(
             self.on_conflict_file_selected
         )
-
         self.main_window.edit_menu.actions()[0].triggered.connect(self.undo)
         self.main_window.edit_menu.actions()[1].triggered.connect(self.redo)
         self.main_window.edit_menu.actions()[3].triggered.connect(self.cut)
         self.main_window.edit_menu.actions()[4].triggered.connect(self.copy)
         self.main_window.edit_menu.actions()[5].triggered.connect(self.paste)
-
         self.main_window.tab_widget.currentChanged.connect(self.on_tab_changed)
+        self.main_window.next_item_button.clicked.connect(self.on_next_item)
+        self.main_window.prev_item_button.clicked.connect(self.on_prev_item)
 
-        self.workspace_manager.workspace_changed.connect(
-            self.file_manager.set_workspace_path
-        )
-        self.workspace_manager.workspace_changed.connect(
-            self.run_manager.set_workspace_path
-        )
-        self.workspace_manager.workspace_changed.connect(
-            self.lsp_client.clear_lsp_manager
-        )
-        self.workspace_manager.workspace_changed.connect(
-            self.history_manager.set_workspace_path
-        )
-        self.workspace_manager.workspace_changed.connect(
-            self.git_manager.set_workspace_path
-        )
+        self.workspace_manager.workspace_changed.connect(self.on_workspace_changed)
         self.workspace_manager.lsp_manager_created.connect(
             self.lsp_client.set_lsp_manager
         )
-
         self.file_manager.file_opened.connect(self.on_editor_opened)
         self.file_manager.file_closed.connect(self.on_file_closed)
         self.file_manager.file_modified.connect(self.on_file_modified)
         self.file_manager.file_saved.connect(self.history_manager.record_save)
         self.file_manager.file_saved.connect(self.on_file_saved)
-
         self.autosave_timer.timeout.connect(self.trigger_autosave)
-
         timeline = self.main_window.timeline_panel
-        timeline.history_item_selected.connect(self.on_history_item_selected)
+        timeline.history_item_selected.connect(self.on_timeline_item_selected)
         timeline.restore_requested.connect(self.on_restore_requested)
         timeline.delete_requested.connect(self.on_delete_requested)
+        timeline.delete_all_requested.connect(self.on_delete_all_requested)
         timeline.pin_toggled.connect(self.on_pin_toggled)
         timeline.rename_requested.connect(self.on_rename_requested)
         timeline.compare_with_requested.connect(self.on_compare_with_requested)
         timeline.show_contents_requested.connect(self.on_show_contents_requested)
-
         self.theme_manager.theme_changed.connect(self.on_theme_changed)
+
+    @Slot(str)
+    def on_workspace_changed(self, path: str):
+        self._reset_git_state()
+        self.file_manager.set_workspace_path(path)
+        self.run_manager.set_workspace_path(path)
+        self.lsp_client.clear_lsp_manager()
+        self.history_manager.set_workspace_path(path)
+        self.git_manager.set_workspace_path(path)
+
+    def _reset_git_state(self):
+        if self.in_merge_conflict_mode:
+            self._exit_merge_mode()
+
+    @Slot(bool)
+    def on_repo_status_changed(self, has_repo: bool):
+        self.main_window.git_branch_widget.setVisible(has_repo)
+        if not has_repo:
+            self.main_window.commit_info_widget.setVisible(False)
 
     def _enter_merge_mode(self, conflicted_files: list):
         if self.in_merge_conflict_mode:
             return
         self.in_merge_conflict_mode = True
-
         self.main_window.conflicts_panel.update_conflicts(conflicted_files)
         self.main_window.source_control_panel.enter_merge_mode(conflicted_files)
         self.main_window.file_explorer_dock.setVisible(False)
         self.main_window.timeline_dock.setVisible(False)
-
         self.main_window.conflicts_dock.setVisible(True)
         self.main_window.conflicts_dock.raise_()
 
@@ -159,13 +203,11 @@ class MainController(QObject):
         if not self.in_merge_conflict_mode:
             return
         self.in_merge_conflict_mode = False
-
         for i in range(self.main_window.tab_widget.count()):
             editor = self.main_window.tab_widget.widget(i)
             if isinstance(editor, EditorWidget) and editor.property("is_merge_editor"):
                 editor.exit_merge_mode()
                 editor.setProperty("is_merge_editor", False)
-
         self.main_window.source_control_panel.exit_merge_mode()
         self.main_window.conflicts_dock.setVisible(False)
         self.main_window.file_explorer_dock.setVisible(True)
@@ -179,9 +221,7 @@ class MainController(QObject):
 
     @Slot(list, list)
     def on_git_status_changed_for_conflicts(self, staged: list, unstaged: list):
-        """Updates the dedicated conflicts panel when in merge mode."""
         if self.in_merge_conflict_mode:
-
             self.main_window.conflicts_panel.update_conflicts(unstaged)
 
     def on_abort_merge(self):
@@ -192,14 +232,11 @@ class MainController(QObject):
     def on_clone_repo_requested(self):
         dialog = CloneDialog(self.main_window)
         self.clone_dialog = dialog
-
         dialog.clone_requested.connect(self.git_manager.clone_repo)
         self.git_manager.clone_progress.connect(dialog.update_progress)
         self.git_manager.clone_finished.connect(self.on_clone_finished)
         self.git_manager.clone_finished.connect(dialog.on_clone_finished)
-
         dialog.exec()
-
         try:
             self.git_manager.clone_progress.disconnect(dialog.update_progress)
             self.git_manager.clone_finished.disconnect(self.on_clone_finished)
@@ -226,6 +263,7 @@ class MainController(QObject):
             editor.mark_as_resolved_requested.connect(self.on_mark_as_resolved)
             editor.all_conflicts_resolved.connect(self.on_all_conflicts_resolved)
             self.update_outline_for_conflict_editor(editor)
+            self._update_ui_for_editor(editor)
         else:
             self.lsp_client.on_file_opened(uri, lang_id, content, editor)
             editor.bridge.stage_lines_requested.connect(self.on_stage_lines)
@@ -240,26 +278,25 @@ class MainController(QObject):
 
     @Slot(EditorWidget)
     def on_all_conflicts_resolved(self, editor: EditorWidget):
-        """Called automatically from JS when an action resolves the last conflict."""
         self._on_get_text_for_resolve(editor)
 
     @Slot(EditorWidget)
     def on_mark_as_resolved(self, editor: EditorWidget):
-        """Called manually by the user clicking the button."""
-
         def proceed_to_resolve():
             self._on_get_text_for_resolve(editor)
 
         def on_check_complete(has_conflicts):
             if has_conflicts:
-                reply = QMessageBox.question(
-                    self.main_window,
-                    "Conflicts Remain",
-                    "This file still contains conflict markers.\nAre you sure you want to mark it as resolved?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply == QMessageBox.StandardButton.Yes:
+                if (
+                    QMessageBox.question(
+                        self.main_window,
+                        "Conflicts Remain",
+                        "This file still contains conflict markers.\nAre you sure you want to mark it as resolved?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No,
+                    )
+                    == QMessageBox.StandardButton.Yes
+                ):
                     proceed_to_resolve()
             else:
                 proceed_to_resolve()
@@ -274,7 +311,6 @@ class MainController(QObject):
         def save_and_stage(content: str):
             if content is None:
                 return
-
             relative_path = str(
                 Path(path).relative_to(self.git_manager.repo.working_dir)
             )
@@ -295,7 +331,6 @@ class MainController(QObject):
         mime_data.setText(selected_text)
         mime_data.setData("application/x-forge-hunk", b"1")
         clipboard.setMimeData(mime_data)
-        print("[Controller] Staged lines to clipboard.")
 
     @Slot(EditorWidget)
     def on_apply_staged_changes(self, editor):
@@ -310,47 +345,42 @@ class MainController(QObject):
                 final_text_lines.append(line[1:])
         final_text = "\n".join(final_text_lines)
         editor.apply_hunk(final_text)
-        print("[Controller] Applied staged changes.")
 
     def undo(self):
         editor = self.main_window.get_current_editor()
-        if isinstance(editor, EditorWidget):
-            editor.bridge.undo_requested.emit()
+        isinstance(editor, EditorWidget) and editor.bridge.undo_requested.emit()
 
     def redo(self):
         editor = self.main_window.get_current_editor()
-        if isinstance(editor, EditorWidget):
-            editor.bridge.redo_requested.emit()
+        isinstance(editor, EditorWidget) and editor.bridge.redo_requested.emit()
 
     def cut(self):
         editor = self.main_window.get_current_editor()
-        if isinstance(editor, EditorWidget):
-            editor.bridge.cut_requested.emit()
+        isinstance(editor, EditorWidget) and editor.bridge.cut_requested.emit()
 
     def copy(self):
         editor = self.main_window.get_current_editor()
-        if isinstance(editor, EditorWidget):
-            editor.bridge.copy_requested.emit()
+        isinstance(editor, EditorWidget) and editor.bridge.copy_requested.emit()
 
     def paste(self):
         editor = self.main_window.get_current_editor()
-        if isinstance(editor, EditorWidget):
-            editor.bridge.paste_requested.emit()
+        isinstance(editor, EditorWidget) and editor.bridge.paste_requested.emit()
 
-    @Slot(object)
-    def on_restore_requested(self, diff_widget: QWidget):
-        history_path_str = getattr(diff_widget, "history_path_str", None)
-        current_path_str = getattr(diff_widget, "current_path_str", None)
-        if not history_path_str or not current_path_str:
+    @Slot(str)
+    def on_restore_requested(self, history_path_str: str):
+        current_path_str = self.main_window.timeline_panel.current_file_path
+        if not (history_path_str and current_path_str):
             return
-        reply = QMessageBox.question(
-            self.main_window,
-            "Confirm Restore",
-            "Are you sure you want to restore this version?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.No:
+        if (
+            QMessageBox.question(
+                self.main_window,
+                "Confirm Restore",
+                "Are you sure you want to restore this version?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            == QMessageBox.StandardButton.No
+        ):
             return
         history_content = self.history_manager.get_history_content(history_path_str)
         if history_content is None:
@@ -358,13 +388,18 @@ class MainController(QObject):
         editor = self.file_manager.editors_by_path.get(current_path_str)
 
         def on_restore_complete():
-            if editor:
-                editor_index = self.main_window.tab_widget.indexOf(editor)
-                if editor_index != -1:
-                    self.main_window.tab_widget.setCurrentIndex(editor_index)
-            diff_index = self.main_window.tab_widget.indexOf(diff_widget)
-            if diff_index != -1:
-                self.main_window.tab_widget.removeTab(diff_index)
+            if editor and self.main_window.tab_widget.indexOf(editor) != -1:
+                self.main_window.tab_widget.setCurrentIndex(
+                    self.main_window.tab_widget.indexOf(editor)
+                )
+            for i in range(self.main_window.tab_widget.count()):
+                widget = self.main_window.tab_widget.widget(i)
+                if (
+                    isinstance(widget, DiffEditorWidget)
+                    and getattr(widget, "history_path_str", None) == history_path_str
+                ):
+                    self.main_window.tab_widget.removeTab(i)
+                    break
             if editor:
                 self.file_manager.mark_file_clean(editor)
 
@@ -373,8 +408,9 @@ class MainController(QObject):
             on_restore_complete()
 
         if editor:
-            uri = Path(current_path_str).as_uri()
-            lang_id = self.file_manager.get_language_id(current_path_str)
+            uri, lang_id = Path(
+                current_path_str
+            ).as_uri(), self.file_manager.get_language_id(current_path_str)
             editor.set_content(history_content, lang_id, uri, on_content_set_and_saved)
         else:
             with open(current_path_str, "w", encoding="utf-8") as f:
@@ -395,7 +431,20 @@ class MainController(QObject):
         self._update_timeline_for_editor(editor)
 
     def _update_ui_for_editor(self, editor):
-        is_merge_editor = editor and editor.property("is_merge_editor")
+        is_diff, is_merge_editor = isinstance(editor, DiffEditorWidget), bool(
+            editor and editor.property("is_merge_editor")
+        )
+        is_readonly_history = getattr(editor, "metadata", {}).get(
+            "is_history_view", False
+        )
+        is_special_view = is_diff or is_readonly_history
+        is_navigable = is_diff or is_merge_editor
+        self.main_window.prev_item_button.setVisible(is_navigable)
+        self.main_window.next_item_button.setVisible(is_navigable)
+        if is_navigable:
+            tooltip_noun = "Conflict" if is_merge_editor else "Change"
+            self.main_window.prev_item_button.setToolTip(f"Previous {tooltip_noun}")
+            self.main_window.next_item_button.setToolTip(f"Next {tooltip_noun}")
         if self.in_merge_conflict_mode or is_merge_editor:
             self.run_manager.update_run_actions_state(None)
             if is_merge_editor:
@@ -404,52 +453,53 @@ class MainController(QObject):
                 self.main_window.outline_panel.clear_symbols()
             self.main_window.lsp_status_label.setText("LSP: Disabled (Merge)")
             return
-        is_diff = isinstance(editor, DiffEditorWidget)
-        is_readonly_history = getattr(editor, "metadata", {}).get(
-            "is_history_view", False
-        )
-        is_special_view = is_diff or is_readonly_history
         self.run_manager.update_run_actions_state(None if is_special_view else editor)
         self.lsp_client.update_outline_panel(None if is_special_view else editor)
         if is_special_view:
             self.main_window.lsp_status_label.setText("LSP: Disabled")
         else:
-            lang_id = None
-            if isinstance(editor, EditorWidget):
-                path = self.file_manager.open_file_paths.get(editor)
-                if path:
-                    lang_id = self.file_manager.get_language_id(path)
+            lang_id = (
+                self.file_manager.get_language_id(
+                    self.file_manager.open_file_paths.get(editor, "")
+                )
+                if isinstance(editor, EditorWidget)
+                else None
+            )
             if self.lsp_client.is_lsp_ready:
                 self.main_window.lsp_status_label.setText(
                     "LSP: Disabled" if lang_id != "python" else "LSP: Ready"
                 )
 
     def _update_timeline_for_editor(self, editor):
-        if self.in_merge_conflict_mode:
+        if (
+            self.in_merge_conflict_mode
+            or not isinstance(editor, EditorWidget)
+            or isinstance(editor, DiffEditorWidget)
+        ):
             self.main_window.timeline_panel.clear_view()
             return
-
-        if editor is None:
+        file_path = self.file_manager.open_file_paths.get(editor)
+        if not file_path:
             self.main_window.timeline_panel.clear_view()
             return
-        editor_metadata = getattr(editor, "metadata", {})
-        if editor_metadata.get("is_history_view"):
-            self.main_window.timeline_panel.show_details_view(
-                editor_metadata["history_details"]
+        local_history = self.history_manager.get_history_for_file(file_path)
+        git_history = self.git_manager.get_file_commit_history(file_path)
+        unified_history = []
+        for path, meta in local_history:
+            unified_history.append(
+                {
+                    "type": "save",
+                    "timestamp": meta["timestamp"],
+                    "path": str(path),
+                    "meta": meta,
+                }
             )
-            return
-        if isinstance(editor, DiffEditorWidget):
-            self.main_window.timeline_panel.details_view_button.setChecked(True)
-            return
-        if editor in self.file_manager.open_file_paths:
-            file_path = self.file_manager.open_file_paths.get(editor)
-            if file_path:
-                history = self.history_manager.get_history_for_file(file_path)
-                self.main_window.timeline_panel.show_list_view(file_path, history)
-            else:
-                self.main_window.timeline_panel.clear_view()
-        else:
-            self.main_window.timeline_panel.clear_view()
+        for commit in git_history:
+            unified_history.append(
+                {"type": "commit", "timestamp": commit["timestamp"], **commit}
+            )
+        unified_history.sort(key=lambda x: x["timestamp"], reverse=True)
+        self.main_window.timeline_panel.update_view(file_path, unified_history)
 
     @Slot(EditorWidget)
     def on_file_modified(self, editor):
@@ -471,7 +521,27 @@ class MainController(QObject):
         if editor and self.file_manager.open_file_paths.get(editor) == file_path:
             self._update_timeline_for_editor(editor)
 
-    @Slot(str, str)
+    @Slot(dict)
+    def on_timeline_item_selected(self, data: dict):
+        if data["type"] == "save":
+            self.on_history_item_selected(
+                self.main_window.timeline_panel.current_file_path, data["path"]
+            )
+        elif data["type"] == "commit":
+            self.on_commit_item_selected(
+                self.main_window.timeline_panel.current_file_path, data["sha"]
+            )
+
+    def on_commit_item_selected(self, file_path_str: str, sha: str):
+        original, modified = self.git_manager.get_commit_diff(file_path_str, sha)
+        diff_widget = DiffEditorWidget(self.theme_manager.get_current_theme_data())
+        original_label = f"{Path(file_path_str).name} ({sha[:7]}^)"
+        modified_label = f"{Path(file_path_str).name} ({sha[:7]})"
+        diff_widget.set_diff_content(original, modified, original_label, modified_label)
+        self.main_window.add_editor_tab(
+            f"{Path(file_path_str).name} (commit)", diff_widget
+        )
+
     def on_history_item_selected(self, current_path_str: str, history_path_str: str):
         try:
             current_content = Path(current_path_str).read_text(encoding="utf-8")
@@ -484,20 +554,27 @@ class MainController(QObject):
         if history_content is None:
             return
         diff_widget = DiffEditorWidget(self.theme_manager.get_current_theme_data())
-        diff_widget.history_path_str = history_path_str
-        diff_widget.current_path_str = current_path_str
+        diff_widget.history_path_str, diff_widget.current_path_str = (
+            history_path_str,
+            current_path_str,
+        )
         diff_widget.primary_action_requested.connect(self.on_restore_requested)
         diff_widget.set_primary_action("Restore This Version")
         diff_widget.stage_lines_requested.connect(self.on_stage_lines)
-        history_path, current_path = Path(history_path_str), Path(current_path_str)
-        timeline = self.main_window.timeline_panel
+        history_path, current_path, timeline = (
+            Path(history_path_str),
+            Path(current_path_str),
+            self.main_window.timeline_panel,
+        )
         history_entries = self.history_manager.get_history_for_file(current_path_str)
         meta = next((m for p, m in history_entries if str(p) == history_path_str), {})
         relative_time, full_time = timeline._format_timestamp(
             meta["timestamp"]
         ), timeline._format_timestamp(meta["timestamp"], relative=False)
-        original_label = f"Historical ({relative_time})"
-        modified_label = f"Current ({current_path.name})"
+        original_label, modified_label = (
+            f"Historical ({relative_time})",
+            f"Current ({current_path.name})",
+        )
         diff_widget.set_diff_content(
             history_content, current_content, original_label, modified_label
         )
@@ -514,11 +591,26 @@ class MainController(QObject):
 
     @Slot(str)
     def on_delete_requested(self, history_path_str: str):
-        reply = QMessageBox.question(
-            self.main_window, "Confirm Delete", "Permanently delete this snapshot?"
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        if (
+            QMessageBox.question(
+                self.main_window, "Confirm Delete", "Permanently delete this snapshot?"
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
             self.history_manager.delete_snapshot(history_path_str)
+            self._update_timeline_for_editor(self.main_window.get_current_editor())
+
+    @Slot(str)
+    def on_delete_all_requested(self, file_path_str: str):
+        if (
+            QMessageBox.question(
+                self.main_window,
+                "Confirm Clear History",
+                f"Permanently delete all local snapshots for '{Path(file_path_str).name}'?",
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
+            self.history_manager.delete_all_snapshots(file_path_str)
             self._update_timeline_for_editor(self.main_window.get_current_editor())
 
     @Slot(str, bool)
@@ -589,12 +681,13 @@ class MainController(QObject):
                 "deletions": meta.get("deletions", 0),
             },
         }
-        fake_uri = f"history://{history_path_str}"
 
         def on_content_set():
             editor.set_read_only(True)
 
-        editor.set_content(history_content, lang_id, fake_uri, on_content_set)
+        editor.set_content(
+            history_content, lang_id, f"history://{history_path_str}", on_content_set
+        )
         self.main_window.add_editor_tab(
             f"{Path(original_path).name} (Read-only)", editor
         )
@@ -603,19 +696,18 @@ class MainController(QObject):
     def on_git_file_selected(self, file_path_str: str, status: str):
         if not self.git_manager.repo:
             return
-        workspace_path = Path(self.git_manager.repo.working_dir)
-        full_path = workspace_path / file_path_str
-
+        workspace_path, full_path = (
+            Path(self.git_manager.repo.working_dir),
+            Path(self.git_manager.repo.working_dir) / file_path_str,
+        )
         if self.in_merge_conflict_mode and status == "U":
             self.file_manager.open_file_from_path(str(full_path))
             return
-
-        original_content = ""
-        if status in ["A", "U"] and not self.in_merge_conflict_mode:
-            original_content = ""
-        else:
-            original_content = self.git_manager.get_head_content(file_path_str)
-
+        original_content = (
+            ""
+            if status in ["A", "U"] and not self.in_merge_conflict_mode
+            else self.git_manager.get_head_content(file_path_str)
+        )
         if original_content is None:
             QMessageBox.critical(
                 self.main_window,
@@ -623,7 +715,6 @@ class MainController(QObject):
                 f"Could not get HEAD content for {file_path_str}",
             )
             return
-
         try:
             modified_content = (
                 "" if status == "D" else full_path.read_text(encoding="utf-8")
@@ -633,11 +724,12 @@ class MainController(QObject):
                 self.main_window, "Error", f"Could not read current file: {e}"
             )
             return
-
         diff_widget = DiffEditorWidget(self.theme_manager.get_current_theme_data())
         diff_widget.set_primary_action("Discard Changes", False)
-        original_label = f"{Path(file_path_str).name} (HEAD)"
-        modified_label = f"{Path(file_path_str).name} (Workspace)"
+        original_label, modified_label = (
+            f"{Path(file_path_str).name} (HEAD)",
+            f"{Path(file_path_str).name} (Workspace)",
+        )
         diff_widget.set_diff_content(
             original_content, modified_content, original_label, modified_label
         )
@@ -648,16 +740,36 @@ class MainController(QObject):
     @Slot(list)
     def on_git_discard_changes(self, file_paths: list[str]):
         file_list = "\n - ".join(Path(p).name for p in file_paths)
-        reply = QMessageBox.question(
-            self.main_window,
-            "Discard Changes",
-            f"Are you sure you want to discard changes to the following files?\n - {file_list}\nThis action cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        if (
+            QMessageBox.question(
+                self.main_window,
+                "Discard Changes",
+                f"Are you sure you want to discard changes to the following files?\n - {file_list}\nThis action cannot be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
             for file_path in file_paths:
                 self.git_manager.discard_changes(file_path)
+
+    @Slot(str)
+    def on_open_file_from_git(self, relative_path: str):
+        if not self.git_manager.repo:
+            return
+        full_path = Path(self.git_manager.repo.working_dir) / relative_path
+        self.file_manager.open_file_from_path(str(full_path))
+
+    @Slot(str)
+    def on_show_history_from_git(self, relative_path: str):
+        self.main_window.timeline_dock.raise_()
+
+    @Slot(str)
+    def on_reveal_in_explorer(self, relative_path: str):
+        if not self.git_manager.repo:
+            return
+        full_path = Path(self.git_manager.repo.working_dir) / relative_path
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(full_path.parent)))
 
     @Slot(str, bool)
     def on_git_commit(self, message: str, stage_all: bool):
@@ -670,36 +782,45 @@ class MainController(QObject):
 
     @Slot(int, int)
     def on_git_remote_status_changed(self, ahead: int, behind: int):
-        if ahead == 0 and behind == 0:
-            self.main_window.git_remote_status_label.setText("")
+        self.main_window.git_remote_status_label.setText(
+            f" ↑{ahead} ↓{behind}" if ahead or behind else ""
+        )
+
+    @Slot(str, str, str)
+    def on_head_commit_changed(self, author, relative_date, short_sha):
+        if author:
+            self.main_window.commit_info_label.setText(
+                f"{author}, {relative_date} ({short_sha})"
+            )
+            self.main_window.commit_info_widget.setVisible(True)
         else:
-            self.main_window.git_remote_status_label.setText(f" ↑{ahead} ↓{behind}")
+            self.main_window.commit_info_widget.setVisible(False)
 
     @Slot()
     def on_upstream_branch_not_found(self):
         branch_name = self.git_manager.current_branch
-        reply = QMessageBox.question(
-            self.main_window,
-            "Publish Branch",
-            f"The branch '{branch_name}' has no upstream branch.\n\nDo you want to publish this branch and set the remote as its upstream?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        if (
+            QMessageBox.question(
+                self.main_window,
+                "Publish Branch",
+                f"The branch '{branch_name}' has no upstream branch.\n\nDo you want to publish this branch and set the remote as its upstream?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
             self.git_manager.push_and_set_upstream()
 
     @Slot(dict)
     def on_theme_changed(self, theme_data: dict):
         for i in range(self.main_window.tab_widget.count()):
             widget = self.main_window.tab_widget.widget(i)
-            if hasattr(widget, "apply_theme") and callable(widget.apply_theme):
+            if hasattr(widget, "apply_theme"):
                 widget.apply_theme(theme_data)
         for editor in self.file_manager.editor_cache:
-            if hasattr(editor, "apply_theme") and callable(editor.apply_theme):
+            if hasattr(editor, "apply_theme"):
                 editor.apply_theme(theme_data)
-        if self.main_window._preloaded_editor and hasattr(
-            self.main_window._preloaded_editor, "apply_theme"
-        ):
+        if self.main_window._preloaded_editor:
             self.main_window._preloaded_editor.apply_theme(theme_data)
 
     @Slot(str)
@@ -719,6 +840,143 @@ class MainController(QObject):
             for i, line in enumerate(lines):
                 if line.startswith("<<<<<<<"):
                     hunks.append({"name": "Conflict Block", "line": i + 1, "char": 0})
+            hunk_lines = [h["line"] for h in hunks]
+            editor.setProperty("hunk_lines", hunk_lines)
+            editor.setProperty("current_hunk_index", -1)
             self.main_window.outline_panel.update_from_hunks(hunks)
 
         editor.get_text(on_text_received)
+
+    @Slot()
+    def on_next_item(self):
+        editor = self.main_window.get_current_editor()
+        if isinstance(editor, DiffEditorWidget):
+            editor.go_to_next_change()
+        elif isinstance(editor, EditorWidget) and bool(
+            editor.property("is_merge_editor")
+        ):
+            hunk_lines = editor.property("hunk_lines")
+            if not hunk_lines:
+                return
+            current_index = editor.property("current_hunk_index")
+            current_index = (current_index + 1) % len(hunk_lines)
+            editor.setProperty("current_hunk_index", current_index)
+            editor.jump_and_highlight(hunk_lines[current_index] - 1, 0)
+
+    @Slot()
+    def on_prev_item(self):
+        editor = self.main_window.get_current_editor()
+        if isinstance(editor, DiffEditorWidget):
+            editor.go_to_previous_change()
+        elif isinstance(editor, EditorWidget) and bool(
+            editor.property("is_merge_editor")
+        ):
+            hunk_lines = editor.property("hunk_lines")
+            if not hunk_lines:
+                return
+            current_index = editor.property("current_hunk_index")
+            current_index = (current_index - 1 + len(hunk_lines)) % len(hunk_lines)
+            editor.setProperty("current_hunk_index", current_index)
+            editor.jump_and_highlight(hunk_lines[current_index] - 1, 0)
+
+    @Slot(dict, str)
+    def on_branches_updated(self, branch_data: dict, current_branch: str):
+        self.branch_data_cache, self.current_branch_cache = branch_data, current_branch
+
+    @Slot()
+    def on_branch_menu_requested(self):
+        self.branch_menu.populate_branches(
+            self.branch_data_cache, self.current_branch_cache
+        )
+        pos = self.main_window.git_branch_widget.mapToGlobal(QPoint(0, 0))
+        pos.setY(pos.y() - self.branch_menu.sizeHint().height())
+        self.branch_menu.exec(pos)
+
+    @Slot()
+    def on_create_branch_requested(self):
+        all_branches = [b[0] for b in self.branch_data_cache.get("local", [])] + [
+            b[0] for b in self.branch_data_cache.get("remote", [])
+        ]
+        dialog = CreateBranchDialog(
+            all_branches, self.current_branch_cache, self.main_window
+        )
+        dialog.create_branch_requested.connect(self.git_manager.create_branch)
+        dialog.exec()
+
+    @Slot(str, bool, str)
+    def on_merge_branch_requested(
+        self, branch_name: str, squash: bool = False, message: str = ""
+    ):
+        if not message:
+            action = "Squash Merge" if squash else "Merge"
+            if squash:
+                msg = (
+                    f"This will combine all commits from '{branch_name}' into a single new commit on your current branch '{self.current_branch_cache}'.\n\n"
+                    "A squash merge does not create a merge commit. This is useful for keeping a clean history. Are you sure?"
+                )
+            else:
+                msg = f"This will merge branch '{branch_name}' into your current branch '{self.current_branch_cache}'.\n\nThis may create a merge commit. Are you sure you want to continue?"
+            dialog = ActionConfirmationDialog(
+                f"Confirm {action}", msg, action, self.main_window
+            )
+            if dialog.exec():
+                self.git_manager.merge_branch(
+                    branch_name, squash, f"Merge branch '{branch_name}'"
+                )
+        else:
+            self.git_manager.merge_branch(branch_name, squash, message)
+
+    @Slot(str)
+    def on_rebase_branch_requested(self, branch_name: str):
+        msg = f"This will rebase your current branch '{self.current_branch_cache}' onto '{branch_name}'.\n\nThis will rewrite the commit history of your current branch. Are you sure you want to continue?"
+        dialog = ActionConfirmationDialog(
+            "Confirm Rebase", msg, "Rebase", self.main_window
+        )
+        if dialog.exec():
+            self.git_manager.rebase_branch(branch_name)
+
+    @Slot(str)
+    def on_rename_branch_requested(self, old_name: str):
+        new_name, ok = QInputDialog.getText(
+            self.main_window,
+            "Rename Branch",
+            f"Enter new name for branch '{old_name}':",
+            text=old_name,
+        )
+        if ok and new_name and new_name != old_name:
+            self.git_manager.rename_branch(old_name, new_name)
+
+    @Slot(str, bool)
+    def on_delete_branch_requested(self, branch_name: str, is_remote: bool):
+        branch_type, display_name = ("remote" if is_remote else "local"), (
+            branch_name.replace("origin/", "", 1) if is_remote else branch_name
+        )
+        msg = f"Are you sure you want to permanently delete the {branch_type} branch '{display_name}'?\n\nThis action cannot be undone."
+        dialog = ActionConfirmationDialog(
+            f"Confirm Delete {branch_type.capitalize()} Branch",
+            msg,
+            "Delete",
+            self.main_window,
+        )
+        if dialog.exec():
+            self.git_manager.delete_branch(branch_name, is_remote)
+
+    @Slot()
+    def on_manage_branches_requested(self):
+        dialog = BranchOperationsStudio(
+            self.branch_data_cache, self.current_branch_cache, self.main_window
+        )
+        dialog.create_branch_requested.connect(self.on_create_branch_requested)
+        dialog.merge_branch_requested.connect(
+            lambda branch, squash, msg: self.git_manager.merge_branch(
+                branch, squash, msg
+            )
+        )
+        dialog.rebase_branch_requested.connect(self.on_rebase_branch_requested)
+        dialog.rename_branch_requested.connect(self.on_rename_branch_requested)
+        dialog.delete_branch_requested.connect(
+            lambda branch, remote: self.on_delete_branch_requested(
+                branch, is_remote=remote
+            )
+        )
+        dialog.exec()
