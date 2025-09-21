@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QButtonGroup,
     QLineEdit,
+    QMessageBox,
 )
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction, QDesktopServices
 from PySide6.QtCore import (
@@ -51,6 +52,8 @@ class TimelineFilterProxyModel(QSortFilterProxyModel):
 
 class TimelinePanel(QWidget):
     history_item_selected = Signal(dict)
+
+    item_single_clicked = Signal(dict)
     restore_requested = Signal(str)
     delete_requested = Signal(str)
     delete_all_requested = Signal(str)
@@ -142,6 +145,8 @@ class TimelinePanel(QWidget):
         self.stack.addWidget(self.details_view_widget)
 
         self.tree_view.doubleClicked.connect(self.on_item_double_clicked)
+
+        self.tree_view.clicked.connect(self.on_item_single_clicked)
         self.tree_view.customContextMenuRequested.connect(self.on_context_menu)
         self.button_group.idToggled.connect(self.stack.setCurrentIndex)
         self.filter_edit.textChanged.connect(
@@ -247,7 +252,7 @@ class TimelinePanel(QWidget):
 
         if data["type"] == "save":
             history_path, meta = data["path"], data["meta"]
-            menu.addAction("Compare with...").triggered.connect(
+            menu.addAction("Compare with Current").triggered.connect(
                 lambda: self.compare_with_requested.emit(history_path)
             )
             menu.addAction("Show Contents").triggered.connect(
@@ -259,7 +264,7 @@ class TimelinePanel(QWidget):
             )
             menu.addSeparator()
             menu.addAction("Rename...").triggered.connect(
-                lambda: self.rename_requested.emit(history_path, meta.get("name"))
+                lambda: self.rename_requested.emit(history_path, meta.get("name", ""))
             )
             pin_action = menu.addAction(
                 "Unpin Snapshot" if meta.get("pinned") else "Pin Snapshot"
@@ -285,3 +290,15 @@ class TimelinePanel(QWidget):
         data = item.data(Qt.ItemDataRole.UserRole)
         if data:
             self.history_item_selected.emit(data)
+
+    @Slot(QModelIndex)
+    def on_item_single_clicked(self, index):
+        if not index.isValid():
+            return
+        source_index = self.proxy_model.mapToSource(index)
+        item = self.model.itemFromIndex(source_index)
+        if not item or not self.current_file_path:
+            return
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data:
+            self.item_single_clicked.emit(data)

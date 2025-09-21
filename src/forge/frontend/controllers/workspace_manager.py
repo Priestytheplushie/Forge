@@ -10,6 +10,7 @@ from forge.frontend.assets.icon_map import get_status_icon
 class WorkspaceManager(QObject):
     """Manages the workspace, project settings, and the LSP lifecycle."""
 
+    workspace_will_change = Signal()
     workspace_changed = Signal(str)
     lsp_manager_created = Signal(object)
 
@@ -22,7 +23,6 @@ class WorkspaceManager(QObject):
         self._connect_signals()
 
     def _connect_signals(self):
-
         self.main_window.welcome_file_explorer.open_folder_button.clicked.connect(
             self.open_workspace_dialog
         )
@@ -39,6 +39,9 @@ class WorkspaceManager(QObject):
             self.set_workspace(path)
 
     def set_workspace(self, path: str):
+
+        self.workspace_will_change.emit()
+
         self.workspace_path = path
         self.main_window.setWindowTitle(f"Forge - {os.path.basename(path)}")
 

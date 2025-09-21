@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal, QThread, Slot
 
@@ -21,7 +22,6 @@ class PtyReader(QThread):
         self.running = True
 
     def run(self):
-        print("[PtyReader] Thread starting.")
         while self.running:
             try:
                 if IS_WINDOWS:
@@ -36,30 +36,59 @@ class PtyReader(QThread):
                     break
             except Exception:
                 break
-        print("[PtyReader] Thread finished.")
         self.running = False
 
     def stop(self):
-        print("[PtyReader] Stop requested.")
         self.running = False
 
 
 class TerminalBackend(QObject):
     data_for_frontend = Signal(str)
+    process_detected = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.pty_process = None
         self.pty_master_fd = None
         self.reader_thread = None
-        print(f"[TerminalBackend] __init__ (id: {id(self)})")
+        self.shell_name = "shell"
+        self.last_detected_process = ""
+        self.command_buffer = ""
+
+    def get_shell_name(self) -> str:
+        return self.shell_name
+
+    def _sniff_for_process_name(self, data: str):
+        self.command_buffer += data
+
+        if "\n" in self.command_buffer or "\r" in self.command_buffer:
+
+            last_line = self.command_buffer.strip().split("\n")[-1]
+
+            new_name = None
+            if re.search(
+                r"\bpython(3(\.\d+)?)?\.exe\b|\bpython(3(\.\d+)?)?\b", last_line, re.I
+            ):
+                new_name = "python"
+            elif re.search(r"\bnode\.exe\b|\bnode\b", last_line, re.I):
+                new_name = "node"
+            elif re.search(r"\bgit\.exe\b|\bgit\b", last_line, re.I):
+                new_name = "git"
+            elif re.search(r"\bjava\.exe\b|\bjava\b", last_line, re.I):
+                new_name = "java"
+
+            if new_name and self.last_detected_process != new_name:
+                self.last_detected_process = new_name
+                self.process_detected.emit(new_name)
+
+            self.command_buffer = ""
 
     def start_pty_process(
         self, workspace_path: str, initial_cols: int, initial_rows: int
     ):
-        print(f"[TerminalBackend] Starting pty process in '{workspace_path}'...")
         try:
             if IS_WINDOWS:
+                self.shell_name = "powershell"
                 env = os.environ.copy()
                 if "VIRTUAL_ENV" in env:
                     del env["VIRTUAL_ENV"]
@@ -79,23 +108,24 @@ class TerminalBackend(QObject):
                 )
                 self.pty_master_fd = self.pty_process.fileno()
             else:
-                shell_cmd = os.environ.get("SHELL", "bash")
+                shell = os.environ.get("SHELL", "bash")
+                self.shell_name = os.path.basename(shell)
                 pid, self.pty_master_fd = pty.fork()
                 if pid == 0:
-                    os.execvp(shell_cmd, [shell_cmd])
+                    os.execvp(shell, [shell])
                 self.pty_process = pid
 
-            print(f"[TerminalBackend] Pty process started successfully.")
             self.reader_thread = PtyReader(self.pty_process, self.pty_master_fd, self)
             self.reader_thread.data_ready.connect(self.data_for_frontend)
             self.reader_thread.start()
         except Exception as e:
-            error_msg = f"FATAL ERROR starting terminal process: {e}\r\n"
-            print(error_msg)
-            self.data_for_frontend.emit(error_msg)
+            self.data_for_frontend.emit(
+                f"FATAL ERROR starting terminal process: {e}\r\n"
+            )
 
     @Slot(str)
     def write_to_pty(self, data: str):
+        self._sniff_for_process_name(data)
         if self.pty_process and self.reader_thread and self.reader_thread.running:
             try:
                 if IS_WINDOWS:
@@ -107,7 +137,6 @@ class TerminalBackend(QObject):
 
     @Slot(int, int)
     def set_pty_size(self, cols: int, rows: int):
-        print(f"[TerminalBackend] Resize request received: {cols} cols, {rows} rows")
         if self.pty_process and cols > 0 and rows > 0:
             try:
                 if IS_WINDOWS:
@@ -116,7 +145,6 @@ class TerminalBackend(QObject):
                 print(f"[TerminalBackend] Error resizing pty: {e}")
 
     def close(self):
-        print(f"[TerminalBackend] Close called (id: {id(self)})")
         if self.reader_thread:
             self.reader_thread.stop()
 
@@ -130,13 +158,11 @@ class TerminalBackend(QObject):
 
                     os.kill(self.pty_process, signal.SIGKILL)
             except Exception as e:
-                print(f"[TerminalBackend] Error during process close: {e}")
+                pass
             self.pty_process = None
 
         if self.reader_thread and self.reader_thread.isRunning():
-            print("[TerminalBackend] Waiting for reader thread to terminate...")
             self.reader_thread.wait(500)
             if self.reader_thread.isRunning():
-                print("[TerminalBackend] Reader thread did not terminate, forcing it.")
                 self.reader_thread.terminate()
         self.reader_thread = None

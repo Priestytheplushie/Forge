@@ -96,12 +96,14 @@ class GitManager(QObject):
         self.get_all_branches()
         if (Path(self.repo.git_dir) / "MERGE_HEAD").exists():
             unresolved, staged = set(), set()
+
             for line in self.repo.git.status("--porcelain").strip().split("\n"):
                 if not line:
                     continue
                 status, path = line[:2], line[3:]
                 if status in ("DD", "AU", "UD", "UA", "DU", "AA", "UU"):
                     unresolved.add(path)
+
                 if status[0] != " " and status not in (
                     "DD",
                     "AU",
@@ -112,16 +114,20 @@ class GitManager(QObject):
                     "UU",
                 ):
                     staged.add(path)
+
             unresolved = {p for p in unresolved if not p.startswith(".forge/")}
             staged = {p for p in staged if not p.startswith(".forge/")}
+
             if not self.is_in_merge_conflict:
                 self._log("Merge conflict state detected.")
                 self.is_in_merge_conflict = True
                 self.merge_conflict_detected.emit(sorted(list(unresolved)))
+
             self.status_changed.emit(sorted(list(staged)), sorted(list(unresolved)))
             return
         elif self.is_in_merge_conflict:
             self.is_in_merge_conflict = False
+
         try:
             try:
                 head_commit = self.repo.head.commit
@@ -132,8 +138,10 @@ class GitManager(QObject):
                 )
             except ValueError:
                 self.head_commit_changed.emit("", "", "")
+
             self.current_branch = self.repo.active_branch.name
             self.branch_changed.emit(self.current_branch)
+
             tracking_branch = self.repo.active_branch.tracking_branch()
             if tracking_branch:
                 ahead = sum(
@@ -158,6 +166,7 @@ class GitManager(QObject):
             return
         except Exception:
             self.remote_status_changed.emit(0, 0)
+
         staged = [
             {"path": d.a_path or d.b_path, "status": d.change_type}
             for d in self.repo.index.diff("HEAD", R=True)
@@ -166,9 +175,11 @@ class GitManager(QObject):
             {"path": d.a_path or d.b_path, "status": d.change_type}
             for d in self.repo.index.diff(None)
         ]
+
         for path in self.repo.untracked_files:
             if not self.repo.ignored(path):
                 unstaged.append({"path": path, "status": "A"})
+
         self.status_changed.emit(staged, unstaged)
 
     def get_file_commit_history(self, file_path_str: str) -> list:
@@ -472,7 +483,6 @@ class GitManager(QObject):
         if not self.repo:
             return
         try:
-
             unmerged_blobs = self.repo.index.unmerged_blobs()
             if self.is_in_merge_conflict and unmerged_blobs:
                 self._log(
@@ -513,11 +523,13 @@ class GitManager(QObject):
             self._log(f"Error discarding changes for {file_path_str}: {e}")
 
     def get_head_content(self, file_path_str: str) -> str | None:
+        """Retrieves the content of a file from the HEAD commit."""
         if not self.repo:
             return None
         try:
             return self.repo.git.show(f"HEAD:{file_path_str}")
         except git.GitCommandError:
+
             return ""
         except Exception as e:
             print(f"[GitManager] Error getting HEAD content for {file_path_str}: {e}")

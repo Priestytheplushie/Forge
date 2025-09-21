@@ -10,92 +10,52 @@ from PySide6.QtGui import QAction
 from pathlib import Path
 import os
 from collections import defaultdict
+import time
+import tempfile
 
 from forge.backend.tools.tool_registry import ToolRegistry
 from forge.frontend.components.editor.diff_editor_widget import DiffEditorWidget
 from forge.frontend.windows.tool_confirmation_dialog import ToolConfirmationDialog
 from forge.frontend.windows.create_branch_dialog import CreateBranchDialog
 from forge.frontend.windows.find_replace_dialog import FindReplaceDialog
+from forge.frontend.controllers.lsp_client import uri_to_path
 
 
 class RefactorController(QObject):
     def __init__(
-        self,
-        main_window,
-        refactor_manager,
-        workspace_manager,
-        git_manager,
-        file_manager,
-        theme_manager,
+        self, main_window, workspace_manager, file_manager, theme_manager, lsp_client
     ):
         super().__init__(main_window)
         self.main_window = main_window
-        self.refactor_manager = refactor_manager
         self.workspace_manager = workspace_manager
-        self.git_manager = git_manager
         self.file_manager = file_manager
         self.theme_manager = theme_manager
+        self.lsp_client = lsp_client
+
+        self.refactor_manager = None
+        self.git_manager = None
 
         self.tool_registry = ToolRegistry()
         self.in_review_mode = False
         self.review_session_data = {}
 
         self._setup_dynamic_menus()
-        self._connect_signals()
 
-    def _setup_dynamic_menus(self):
-        menu = self.main_window.refactor_menu
-        menu.clear()
+    def set_managers(self, refactor_manager, git_manager):
+        self.refactor_manager = refactor_manager
+        self.git_manager = git_manager
 
-        tools = self.tool_registry.get_all_tools()
+    def init_connections(self):
+        self.lsp_client.rename_response_received.connect(self.on_rename_response)
 
-        def populate_menu(parent_menu, scope_name, suffix):
-
-            categories = defaultdict(list)
-            top_level_tools = []
-            for tool in tools:
-                if scope_name in tool["scopes"]:
-                    category = tool.get("category")
-                    if category:
-                        categories[category].append(tool)
-                    else:
-                        top_level_tools.append(tool)
-
-            for tool in top_level_tools:
-                action = QAction(f"{tool['name']} on {suffix}...", self)
-                action.triggered.connect(
-                    lambda checked=False, tool_id=tool[
-                        "id"
-                    ]: self.on_refactor_action_triggered(tool_id, scope_name)
-                )
-                parent_menu.addAction(action)
-
-            if top_level_tools and categories:
-                parent_menu.addSeparator()
-
-            for category_name, cat_tools in sorted(categories.items()):
-                submenu = parent_menu.addMenu(category_name)
-                for tool in cat_tools:
-                    action = QAction(f"{tool['name']} on {suffix}...", self)
-                    action.triggered.connect(
-                        lambda checked=False, tool_id=tool[
-                            "id"
-                        ]: self.on_refactor_action_triggered(tool_id, scope_name)
-                    )
-                    submenu.addAction(action)
-
-        populate_menu(menu, "file", "File")
-        menu.addSeparator()
-        populate_menu(menu, "workspace", "Workspace")
-
-        self.main_window.file_explorer.set_refactor_tools(tools)
-
-    def _connect_signals(self):
         self.refactor_manager.review_session_started.connect(
             self.on_review_session_started
         )
+
         self.refactor_manager.log_message.connect(
-            lambda msg: self.main_window.log_to_output("Refactor", msg)
+            lambda msg: self.main_window.log_to_output(
+                "Refactor", msg, raise_panel=True
+            )
         )
 
         self.main_window.file_explorer.refactor_requested.connect(
@@ -115,6 +75,52 @@ class RefactorController(QObject):
         self.main_window.review_toolbar.finish_review_requested.connect(
             self.on_finish_review
         )
+
+    def _setup_dynamic_menus(self):
+        menu = self.main_window.refactor_menu
+        menu.clear()
+        tools = self.tool_registry.get_all_tools()
+
+        def populate_menu_for_scope(parent_menu, scope_name, suffix):
+            categories = defaultdict(list)
+            top_level_tools = []
+
+            for tool in tools:
+                if scope_name in tool["scopes"]:
+                    category = tool.get("category")
+                    if category:
+                        categories[category].append(tool)
+                    else:
+                        top_level_tools.append(tool)
+
+            for tool in sorted(top_level_tools, key=lambda x: x.get("order", 99)):
+                action = QAction(f"{tool['name']} on {suffix}...", self)
+                action.triggered.connect(
+                    lambda checked=False, tool_id=tool[
+                        "id"
+                    ]: self.on_refactor_action_triggered(tool_id, scope_name)
+                )
+                parent_menu.addAction(action)
+
+            if top_level_tools and categories:
+                parent_menu.addSeparator()
+
+            for category_name, cat_tools in sorted(categories.items()):
+                submenu = parent_menu.addMenu(f"{category_name} on {suffix}")
+                for tool in sorted(cat_tools, key=lambda x: x.get("order", 99)):
+                    action = QAction(f"{tool['name']}", self)
+                    action.triggered.connect(
+                        lambda checked=False, tool_id=tool[
+                            "id"
+                        ]: self.on_refactor_action_triggered(tool_id, scope_name)
+                    )
+                    submenu.addAction(action)
+
+        populate_menu_for_scope(menu, "file", "File")
+        menu.addSeparator()
+        populate_menu_for_scope(menu, "workspace", "Workspace")
+
+        self.main_window.file_explorer.set_refactor_tools(tools)
 
     def _get_current_file_for_refactor(self):
         editor = self.main_window.get_current_editor()
@@ -188,7 +194,7 @@ class RefactorController(QObject):
             if not dialog.exec():
                 return
 
-        self.main_window.log_to_output("Refactor", "", clear=True)
+        self.main_window.log_to_output("Refactor", "", clear=True, raise_panel=True)
         self.refactor_manager.run_tool_on_path(path, tool, tool_kwargs)
 
     @Slot(dict)
@@ -485,3 +491,81 @@ class RefactorController(QObject):
         finally:
             self.git_manager.checkout_branch(original_branch)
             self.exit_review_mode()
+
+    @Slot(dict)
+    def on_rename_response(self, workspace_edit: dict):
+        """Handles the LSP response for a rename operation and starts a review session."""
+        changes = workspace_edit.get("changes", {})
+        if not changes:
+            QMessageBox.information(
+                self.main_window,
+                "Rename Symbol",
+                "Could not determine changes for rename operation.",
+            )
+            return
+
+        self.refactor_manager.log_message.emit(
+            "[Forge Refactor] Received rename data from LSP. Building review session..."
+        )
+
+        session_dir = Path(tempfile.gettempdir()) / f"forge_review_{int(time.time())}"
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        session_changes = {}
+
+        for uri, text_edits in changes.items():
+            try:
+                original_path = uri_to_path(uri)
+                original_content = original_path.read_text(encoding="utf-8")
+
+                edits = sorted(
+                    text_edits, key=lambda x: x["range"]["start"]["line"], reverse=True
+                )
+                lines = original_content.splitlines(True)
+
+                for edit in edits:
+                    start_line, start_col = (
+                        edit["range"]["start"]["line"],
+                        edit["range"]["start"]["character"],
+                    )
+                    end_line, end_col = (
+                        edit["range"]["end"]["line"],
+                        edit["range"]["end"]["character"],
+                    )
+
+                    if start_line == end_line:
+                        line_content = lines[start_line]
+                        lines[start_line] = (
+                            line_content[:start_col]
+                            + edit["newText"]
+                            + line_content[end_col:]
+                        )
+                    else:
+                        lines = (
+                            lines[:start_line]
+                            + [edit["newText"]]
+                            + lines[end_line + 1 :]
+                        )
+
+                modified_content = "".join(lines)
+
+                temp_path = session_dir / original_path.name
+                temp_path.write_text(modified_content, encoding="utf-8")
+
+                session_changes[str(original_path)] = {
+                    "original_path": str(original_path),
+                    "temp_path": str(temp_path),
+                    "original_content": original_content,
+                    "modified_content": modified_content,
+                    "summaries": ["Renamed symbol"],
+                }
+            except Exception as e:
+                self.refactor_manager.log_message.emit(
+                    f"[Forge Refactor] ERROR processing rename for {uri}: {e}"
+                )
+
+        final_session_data = {
+            "session_dir": str(session_dir),
+            "changes": session_changes,
+        }
+        self.on_review_session_started(final_session_data)

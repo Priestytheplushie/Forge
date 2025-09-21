@@ -1,4 +1,5 @@
 
+
 require.config({ paths: { 'vs': 'vs' } });
 
 let editor;

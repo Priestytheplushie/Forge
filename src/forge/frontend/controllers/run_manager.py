@@ -99,8 +99,11 @@ class RunManager(QObject):
             self.main_window.terminal_dock.setVisible(True)
             self.main_window.terminal_dock.raise_()
 
-            term_command = f'& python -u "{file_path}"\r\n'
-            self.main_window.terminal.backend.write_to_pty(term_command)
+            new_terminal = self.main_window.terminal.create_new_terminal()
+
+            if new_terminal:
+                term_command = f'python -u "{file_path}"\r\n'
+                new_terminal.send_command(term_command)
 
         elif mode == "output":
             if self.process_runner and self.process_runner.isRunning():
@@ -110,7 +113,10 @@ class RunManager(QObject):
                 return
 
             self.main_window.log_to_output(
-                "Run", f"Running: {sys.executable} -u {file_path}\n", clear=True
+                "Run",
+                f"Running: {sys.executable} -u {file_path}\n",
+                clear=True,
+                raise_panel=True,
             )
             command_list = [sys.executable, "-u", file_path]
 
@@ -127,16 +133,18 @@ class RunManager(QObject):
 
     @Slot(str)
     def on_process_stdout(self, text: str):
-        self.main_window.log_to_output("Run", text)
+        self.main_window.log_to_output("Run", text, raise_panel=True)
 
     @Slot(str)
     def on_process_stderr(self, text: str):
-        self.main_window.log_to_output("Run", text)
+        self.main_window.log_to_output("Run", text, raise_panel=True)
 
     @Slot(int)
     def on_process_finished(self, exit_code: int):
         self.main_window.log_to_output(
-            "Run", f"\n--- Process finished with exit code {exit_code} ---"
+            "Run",
+            f"\n--- Process finished with exit code {exit_code} ---",
+            raise_panel=True,
         )
         self.main_window.stop_action.setEnabled(False)
 

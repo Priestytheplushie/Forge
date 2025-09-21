@@ -1,29 +1,31 @@
 from PySide6.QtCore import QObject, Slot, QPoint
 from PySide6.QtWidgets import QMessageBox, QInputDialog
+from pathlib import Path
 
 from forge.frontend.windows.clone_dialog import CloneDialog
 from forge.frontend.windows.create_branch_dialog import CreateBranchDialog
 from forge.frontend.windows.action_confirmation_dialog import ActionConfirmationDialog
 from forge.frontend.windows.branch_operations_studio import BranchOperationsStudio
 from forge.frontend.components.menus.branch_menu import BranchMenu
+from forge.frontend.components.editor.editor_widget import EditorWidget
+from forge.frontend.components.editor.diff_editor_widget import DiffEditorWidget
 
 
 class GitController(QObject):
-    def __init__(self, main_window, git_manager, workspace_manager):
+    def __init__(self, main_window, git_manager, workspace_manager, file_manager):
         super().__init__(main_window)
         self.main_window = main_window
         self.git_manager = git_manager
         self.workspace_manager = workspace_manager
+        self.file_manager = file_manager
 
         self.branch_data_cache = {}
         self.current_branch_cache = ""
+        self.is_in_merge_conflict = False
 
         self.branch_menu = BranchMenu(self.main_window)
 
-        self._connect_signals()
-
-    def _connect_signals(self):
-
+    def init_connections(self):
         sc_panel = self.main_window.source_control_panel
         sc_panel.stage_requested.connect(self.git_manager.stage_files)
         sc_panel.unstage_requested.connect(self.git_manager.unstage_files)
@@ -36,12 +38,17 @@ class GitController(QObject):
         sc_panel.clone_repo_requested.connect(self.on_clone_repo_requested)
         sc_panel.abort_merge_requested.connect(self.on_abort_merge)
 
+        for editor in self.file_manager.editor_cache:
+            editor.mark_as_resolved_requested.connect(self.on_mark_as_resolved)
+        self.file_manager.file_opened.connect(
+            lambda u, l, c, e: e.mark_as_resolved_requested.connect(
+                self.on_mark_as_resolved
+            )
+        )
+
         self.main_window.git_refresh_button.clicked.connect(self.git_manager.fetch)
         self.main_window.git_pull_button.clicked.connect(self.git_manager.pull)
         self.main_window.git_push_button.clicked.connect(self.git_manager.push)
-        self.main_window.git_branch_widget.clicked.connect(
-            self.on_branch_menu_requested
-        )
 
         self.branch_menu.checkout_requested.connect(self.git_manager.checkout_branch)
         self.branch_menu.create_branch_requested.connect(
@@ -62,6 +69,82 @@ class GitController(QObject):
         self.branch_menu.delete_remote_requested.connect(
             lambda branch: self.on_delete_branch_requested(branch, is_remote=True)
         )
+
+    @Slot(bool)
+    def on_repo_status_changed(self, has_repo: bool):
+        self.main_window.git_branch_widget.setVisible(has_repo)
+        self.main_window.commit_info_widget.setVisible(has_repo)
+
+    @Slot(str)
+    def on_branch_changed(self, branch_name: str):
+        self.current_branch_cache = branch_name
+        self.main_window.git_branch_label.setText(branch_name)
+
+    @Slot(int, int)
+    def on_remote_status_changed(self, ahead: int, behind: int):
+        if ahead == 0 and behind == 0:
+            self.main_window.git_remote_status_label.setText("")
+        else:
+            self.main_window.git_remote_status_label.setText(f" ↑{ahead} ↓{behind}")
+
+    @Slot(str, str, str)
+    def on_head_commit_changed(self, author: str, relative_time: str, sha: str):
+        if author:
+            self.main_window.commit_info_label.setText(f"{author}, {relative_time}")
+            self.main_window.commit_info_label.setToolTip(f"Latest commit: {sha}")
+        else:
+            self.main_window.commit_info_label.setText("No commits yet")
+
+    @Slot(list)
+    def on_merge_conflict(self, conflicted_files: list):
+        if self.is_in_merge_conflict:
+            return
+        self.is_in_merge_conflict = True
+        self.main_window.enter_merge_mode()
+        self.main_window.conflicts_panel.update_conflicts(conflicted_files)
+        self.main_window.source_control_panel.enter_merge_mode(conflicted_files)
+
+    def exit_merge_mode(self):
+        if not self.is_in_merge_conflict:
+            return
+        self.is_in_merge_conflict = False
+        self.main_window.exit_merge_mode()
+        self.main_window.source_control_panel.exit_merge_mode()
+        self.file_manager.close_all_merge_editors()
+
+    @Slot(str, str)
+    def on_git_file_selected(self, file_path: str, status: str):
+
+        full_path = str(Path(self.workspace_manager.workspace_path) / file_path)
+        if self.is_in_merge_conflict and status == "U":
+            self.file_manager.open_file_for_merge(full_path)
+        else:
+            self.file_manager.open_diff_viewer(full_path, status)
+
+    @Slot(str)
+    def on_conflict_file_selected(self, file_path: str):
+
+        full_path = str(Path(self.workspace_manager.workspace_path) / file_path)
+        self.file_manager.open_file_for_merge(full_path)
+
+    @Slot(EditorWidget)
+    def on_mark_as_resolved(self, editor: EditorWidget):
+        file_path = self.file_manager.open_file_paths.get(editor)
+        if not file_path:
+            return
+
+        def on_conflict_check(has_conflicts: bool):
+            if has_conflicts:
+                QMessageBox.warning(
+                    self.main_window,
+                    "Unresolved Conflicts",
+                    "This file still contains conflict markers (<<<<<<<). Please resolve them before marking the file as resolved.",
+                )
+            else:
+                self.git_manager.stage_files([file_path])
+                editor.exit_merge_mode()
+
+        editor.check_for_conflicts(on_conflict_check)
 
     @Slot(dict, str)
     def on_branches_updated(self, branch_data: dict, current_branch: str):
@@ -183,9 +266,22 @@ class GitController(QObject):
     @Slot(str)
     def on_git_commit_merge(self, message: str):
         self.on_git_commit(message, stage_all=False)
-        self.main_window.controller.refactor_controller._exit_merge_mode()
+        self.exit_merge_mode()
 
     @Slot()
     def on_abort_merge(self):
         self.git_manager.abort_merge()
-        self.main_window.controller.refactor_controller._exit_merge_mode()
+        self.exit_merge_mode()
+
+    @Slot()
+    def on_upstream_branch_not_found(self):
+        reply = QMessageBox.question(
+            self.main_window,
+            "No Upstream Branch",
+            f"The current branch '{self.current_branch_cache}' has no upstream branch set.\n\n"
+            "Would you like to push and set the remote as the upstream branch?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.git_manager.push_and_set_upstream()

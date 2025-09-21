@@ -127,15 +127,34 @@ class SourceControlPanel(QWidget):
         no_repo_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         no_repo_layout.setContentsMargins(10, 15, 10, 10)
         no_repo_layout.setSpacing(10)
-        self.init_repo_button = QPushButton("Initialize Repository")
-        self.clone_repo_button = QPushButton("Clone Repository")
-        help_label = QLabel(
-            "<a href='https://git-scm.com/downloads' style='color: #4E94D7;'>Download Git</a>"
+
+        no_repo_layout.addWidget(
+            QLabel("No Git repository detected in the current workspace.")
         )
-        help_label.setOpenExternalLinks(True)
-        no_repo_layout.addWidget(QLabel("No Git repository detected."))
+        no_repo_layout.addSpacing(10)
+
+        init_desc = QLabel("Create a new Git repository in the current folder.")
+        init_desc.setStyleSheet("color: #888;")
+        self.init_repo_button = QPushButton("Initialize Repository")
         no_repo_layout.addWidget(self.init_repo_button)
+        no_repo_layout.addWidget(init_desc)
+        no_repo_layout.addSpacing(15)
+
+        clone_desc = QLabel(
+            "Clone an existing repository from a URL (e.g., from GitHub)."
+        )
+        clone_desc.setStyleSheet("color: #888;")
+        self.clone_repo_button = QPushButton("Clone Repository")
         no_repo_layout.addWidget(self.clone_repo_button)
+        no_repo_layout.addWidget(clone_desc)
+        no_repo_layout.addSpacing(15)
+
+        help_label = QLabel(
+            "To use source control, you need Git installed on your system. <a href='https://git-scm.com/downloads' style='color: #4E94D7;'>Download Git</a>"
+        )
+        help_label.setWordWrap(True)
+        help_label.setOpenExternalLinks(True)
+
         no_repo_layout.addStretch()
         no_repo_layout.addWidget(help_label)
 

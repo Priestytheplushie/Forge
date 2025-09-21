@@ -2,7 +2,8 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import QObject, Slot, Signal
+from PySide6.QtWidgets import QInputDialog
 from ..components.editor.editor_widget import EditorWidget
 
 
@@ -15,6 +16,8 @@ def uri_to_path(uri: str) -> Path:
 
 
 class LSPClient(QObject):
+    rename_response_received = Signal(dict)
+
     def __init__(self, main_window, file_manager):
         super().__init__(main_window)
         self.main_window = main_window
@@ -26,6 +29,7 @@ class LSPClient(QObject):
         self.pending_completion_requests = {}
         self.pending_hover_requests = {}
         self.pending_symbol_requests = {}
+        self.pending_rename_requests = {}
         self._pending_token_request_queue = []
         self.outline_editor = None
         self.is_lsp_ready = False
@@ -87,6 +91,7 @@ class LSPClient(QObject):
         editor.hover_requested.connect(self.on_hover_requested)
         editor.cursor_position_changed.connect(self.on_cursor_position_changed)
         editor.code_action_requested.connect(self.on_code_action_requested)
+        editor.rename_requested.connect(self.on_rename_requested)
 
         if self.lsp_manager and lang_id == "python":
             self.document_versions[uri] = 1
@@ -209,6 +214,23 @@ class LSPClient(QObject):
         else:
             editor.resolve_code_actions(callback_id, [])
 
+    @Slot(str, int, int)
+    def on_rename_requested(self, uri, line, char):
+        if not self.lsp_manager or not self.is_lsp_ready:
+            return
+
+        new_name, ok = QInputDialog.getText(
+            self.main_window, "Rename Symbol", "Enter new name:"
+        )
+        if ok and new_name:
+            params = {
+                "textDocument": {"uri": uri},
+                "position": {"line": line - 1, "character": char - 1},
+                "newName": new_name,
+            }
+            request_id = self.lsp_manager.send_request("textDocument/rename", params)
+            self.pending_rename_requests[request_id] = True
+
     def request_semantic_tokens(self, uri: str):
         if self.lsp_manager and self.is_lsp_ready:
             request_id = self.lsp_manager.send_request(
@@ -247,7 +269,6 @@ class LSPClient(QObject):
         elif request_id in self.pending_symbol_requests:
             uri = self.pending_symbol_requests.pop(request_id)
             symbols = response.get("result", [])
-
             active_uri = None
             if self.outline_editor and self.file_manager.open_file_paths.get(
                 self.outline_editor
@@ -255,9 +276,11 @@ class LSPClient(QObject):
                 active_uri = Path(
                     self.file_manager.open_file_paths[self.outline_editor]
                 ).as_uri()
-
             if uri == active_uri:
                 self.main_window.outline_panel.update_symbols(symbols)
+        elif request_id in self.pending_rename_requests:
+            self.pending_rename_requests.pop(request_id)
+            self.rename_response_received.emit(response.get("result", {}))
 
     @Slot(dict)
     def handle_lsp_notification(self, notification: dict):

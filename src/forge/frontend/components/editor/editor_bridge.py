@@ -15,6 +15,7 @@ class EditorBridge(QObject):
     _completion_requested_from_js = Signal(str, str, int, int)
     _hover_requested_from_js = Signal(str, str, int, int)
     _code_action_requested_from_js = Signal(str, str, list)
+    rename_requested = Signal(str, int, int)
 
     stage_lines_requested = Signal(str)
     apply_staged_changes_requested = Signal()
@@ -80,6 +81,10 @@ class EditorBridge(QObject):
     @Slot(str, str, list)
     def request_code_actions(self, callback_id: str, uri: str, diagnostics: list):
         self._code_action_requested_from_js.emit(callback_id, uri, diagnostics)
+
+    @Slot(str, int, int)
+    def request_rename(self, uri: str, line: int, character: int):
+        self.rename_requested.emit(uri, line, character)
 
     @Slot(str, bool)
     def receive_conflict_check_result(self, callback_id: str, has_conflicts: bool):

@@ -91,10 +91,8 @@ def get_rotated_icon(icon_filename: str, color: QColor, degrees: int) -> QIcon:
     rotated_pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(rotated_pixmap)
-
     painter.translate(size / 2, size / 2)
     painter.rotate(degrees)
-
     painter.translate(-base_pixmap.width() / 2, -base_pixmap.height() / 2)
     painter.drawPixmap(0, 0, base_pixmap)
     painter.end()
@@ -164,6 +162,14 @@ def get_check_icon() -> QIcon:
 
 def get_trash_icon() -> QIcon:
     return _get_colorized_icon("trash-2.svg", QColor("#F77669"))
+
+
+def get_plus_icon() -> QIcon:
+    return _get_colorized_icon("plus.svg", QColor("#D8DEE9"))
+
+
+def get_split_icon() -> QIcon:
+    return _get_colorized_icon("layout.svg", QColor("#D8DEE9"))
 
 
 def get_tooltip_for_symbol(kind: int) -> str:

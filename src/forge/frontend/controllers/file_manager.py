@@ -65,7 +65,7 @@ class FileManager(QObject):
             self.open_file_from_path(file_path)
 
     @Slot(str)
-    def open_file_from_path(self, file_path: str):
+    def open_file_from_path(self, file_path: str, is_merge_conflict: bool = False):
         if not self.workspace_path:
             QMessageBox.warning(
                 self.main_window,
@@ -85,6 +85,8 @@ class FileManager(QObject):
         if canonical_path in self.editors_by_path:
             editor = self.editors_by_path[canonical_path]
             self.main_window.tab_widget.setCurrentWidget(editor)
+            if is_merge_conflict:
+                editor.enter_merge_mode()
             return
 
         try:
@@ -102,6 +104,8 @@ class FileManager(QObject):
             self.open_file_paths[editor] = canonical_path
             self.editors_by_path[canonical_path] = editor
 
+            editor.setProperty("is_merge_editor", is_merge_conflict)
+
             self.main_window.add_editor_tab(file_path, editor)
 
             uri = file_p.as_uri()
@@ -109,6 +113,8 @@ class FileManager(QObject):
 
             def on_model_ready():
                 self.file_opened.emit(uri, lang_id, content, editor)
+                if is_merge_conflict:
+                    editor.enter_merge_mode()
 
             editor.set_content(content, lang_id, uri, on_model_ready)
 
@@ -117,11 +123,53 @@ class FileManager(QObject):
                 self.main_window, "Error", f"Could not open file:\n{e}"
             )
 
+    def open_diff_viewer(self, file_path: str, status: str):
+        head_content = self.main_window.controller.git_manager.get_head_content(
+            file_path
+        )
+
+        try:
+            disk_content = Path(file_path).read_text(encoding="utf-8")
+        except (IOError, UnicodeDecodeError):
+            disk_content = ""
+
+        if head_content is None and status == "A":
+            head_content = ""
+        elif head_content is None:
+            QMessageBox.critical(
+                self.main_window,
+                "Error",
+                f"Could not retrieve previous version of '{os.path.basename(file_path)}' from Git.",
+            )
+            return
+
+        diff_widget = DiffEditorWidget(self.theme_manager.get_current_theme_data())
+        original_label = f"{os.path.basename(file_path)} (HEAD)"
+        modified_label = f"{os.path.basename(file_path)} (Working Tree)"
+        diff_widget.set_diff_content(
+            head_content, disk_content, original_label, modified_label
+        )
+        self.main_window.add_editor_tab(
+            f"Diff: {os.path.basename(file_path)}", diff_widget
+        )
+
+    def open_file_for_merge(self, file_path: str):
+        self.open_file_from_path(file_path, is_merge_conflict=True)
+
+    def close_all_merge_editors(self):
+        for i in reversed(range(self.main_window.tab_widget.count())):
+            widget = self.main_window.tab_widget.widget(i)
+            if widget and widget.property("is_merge_editor"):
+
+                if hasattr(widget, "exit_merge_mode"):
+                    widget.exit_merge_mode()
+                self.handle_close_tab(i, force=True)
+
     @Slot(int)
-    def handle_close_tab(self, index: int):
+    def handle_close_tab(self, index: int, force: bool = False):
         editor_widget = self.main_window.tab_widget.widget(index)
         if editor_widget:
-            if editor_widget in self.dirty_editors:
+            if not force and editor_widget in self.dirty_editors:
                 current_text = self.main_window.tab_widget.tabText(index)
                 file_name = (
                     current_text[:-2] if current_text.endswith(" *") else current_text

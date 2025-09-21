@@ -106,6 +106,9 @@ class MainWindow(QMainWindow):
             self.run_manager,
             self.lsp_client,
         )
+        self.workspace_manager.workspace_will_change.connect(
+            self.controller.git_controller.exit_merge_mode
+        )
 
         self.file_explorer_dock.raise_()
         self.terminal_dock.raise_()
@@ -114,7 +117,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent):
         print("[MainWindow] Close event triggered. Shutting down subsystems.")
         self.controller.shutdown()
-        self.terminal.shutdown()
+        self.terminal.shutdown_all()
         event.accept()
 
     def _create_status_bar(self):
@@ -419,6 +422,8 @@ class MainWindow(QMainWindow):
         self._create_view_menu(menu_bar)
         self._create_go_menu(menu_bar)
         self.run_menu = menu_bar.addMenu("&Run")
+
+        self._create_terminal_menu(menu_bar)
         self._create_help_menu(menu_bar)
 
     def _create_file_menu(self, menu_bar):
@@ -478,6 +483,12 @@ class MainWindow(QMainWindow):
     def _create_go_menu(self, menu_bar):
         self.go_menu = menu_bar.addMenu("&Go")
 
+    def _create_terminal_menu(self, menu_bar):
+        terminal_menu = menu_bar.addMenu("&Terminal")
+        new_terminal_action = QAction("New Terminal", self, shortcut="Ctrl+Shift+`")
+        new_terminal_action.triggered.connect(self.terminal.create_new_terminal)
+        terminal_menu.addAction(new_terminal_action)
+
     def _create_help_menu(self, menu_bar):
         help_menu = menu_bar.addMenu("&Help")
         help_menu.addAction(QAction("&About Forge", self))
@@ -493,7 +504,13 @@ class MainWindow(QMainWindow):
             [self.terminal_dock], [terminal_height], Qt.Orientation.Vertical
         )
 
-    def log_to_output(self, channel_name: str, message: str, clear: bool = False):
+    def log_to_output(
+        self,
+        channel_name: str,
+        message: str,
+        clear: bool = False,
+        raise_panel: bool = False,
+    ):
         if channel_name not in self.output_channels:
             new_output = QTextEdit()
             new_output.setReadOnly(True)
@@ -511,8 +528,9 @@ class MainWindow(QMainWindow):
         combo_index = self.output_channel_combo.findText(channel_name)
         if combo_index != -1:
             self.output_channel_combo.setCurrentIndex(combo_index)
-        self.output_dock.setVisible(True)
-        self.output_dock.raise_()
+        if raise_panel:
+            self.output_dock.setVisible(True)
+            self.output_dock.raise_()
 
     @Slot()
     def on_clear_output(self):
@@ -523,3 +541,18 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def add_debug_log(self, message: str):
         self.debug_console_widget.append(message)
+
+    def enter_merge_mode(self):
+        self.conflicts_dock.setVisible(True)
+        self.outline_dock.setVisible(True)
+        self.file_explorer_dock.setVisible(False)
+        self.timeline_dock.setVisible(False)
+
+        self.conflicts_dock.raise_()
+        self.source_control_dock.raise_()
+
+    def exit_merge_mode(self):
+        self.conflicts_dock.setVisible(False)
+        self.file_explorer_dock.setVisible(True)
+        self.timeline_dock.setVisible(True)
+        self.file_explorer_dock.raise_()

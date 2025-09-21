@@ -26,7 +26,6 @@ class ExternalToolWorker(QThread):
         self.session_dir = session_dir
 
     def run(self):
-
         result_data = {}
         try:
             temp_path = self.session_dir / self.file_path.name
@@ -167,8 +166,9 @@ class RefactorManager(QObject):
     review_session_started = Signal(dict)
     log_message = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, tool_registry, parent=None):
         super().__init__(parent)
+        self.tool_registry = tool_registry
         self.worker = None
         self.session_dir = None
         self.pending_files = []
@@ -288,16 +288,17 @@ class RefactorManager(QObject):
                 tool_kwargs,
             )
         elif tool["handler_type"] == "composite":
+
+            all_tools = self.tool_registry.get_all_tools()
             external_tools = [
                 t["id"]
-                for t in self.main_window.controller.refactor_controller.tool_registry.get_all_tools()
+                for t in all_tools
                 if t["id"] in tool["tool_ids"] and t["handler_type"] == "external"
             ]
             if external_tools:
                 self._run_external_on_path(path_str, tools=external_tools)
 
     def accept_changes(self, change_data: dict):
-
         try:
             original_path = Path(change_data["original_path"])
             temp_path = Path(change_data["temp_path"])
@@ -308,7 +309,6 @@ class RefactorManager(QObject):
             print(f"[RefactorManager] Error accepting changes: {e}")
 
     def discard_changes(self, change_data: dict):
-
         try:
             temp_path = Path(change_data["temp_path"])
             if temp_path.exists():
@@ -320,7 +320,6 @@ class RefactorManager(QObject):
             print(f"[RefactorManager] Error discarding changes: {e}")
 
     def cleanup_session(self, session_dir_str: str):
-
         try:
             session_dir = Path(session_dir_str)
             if session_dir.exists():
