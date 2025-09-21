@@ -206,8 +206,7 @@ class MainController(QObject):
         for i in range(self.main_window.tab_widget.count()):
             editor = self.main_window.tab_widget.widget(i)
             if isinstance(editor, EditorWidget) and editor.property("is_merge_editor"):
-                editor.exit_merge_mode()
-                editor.setProperty("is_merge_editor", False)
+                self.file_manager.close_tab_by_path(editor.property("file_path"))
         self.main_window.source_control_panel.exit_merge_mode()
         self.main_window.conflicts_dock.setVisible(False)
         self.main_window.file_explorer_dock.setVisible(True)
@@ -366,11 +365,18 @@ class MainController(QObject):
         editor = self.main_window.get_current_editor()
         isinstance(editor, EditorWidget) and editor.bridge.paste_requested.emit()
 
-    @Slot(str)
-    def on_restore_requested(self, history_path_str: str):
-        current_path_str = self.main_window.timeline_panel.current_file_path
+    @Slot()
+    def on_restore_requested(self):
+        diff_widget = self.sender().parent()
+        if not isinstance(diff_widget, DiffEditorWidget):
+            return
+
+        history_path_str, current_path_str = getattr(
+            diff_widget, "history_path_str", None
+        ), getattr(diff_widget, "current_path_str", None)
         if not (history_path_str and current_path_str):
             return
+
         if (
             QMessageBox.question(
                 self.main_window,
@@ -382,9 +388,11 @@ class MainController(QObject):
             == QMessageBox.StandardButton.No
         ):
             return
+
         history_content = self.history_manager.get_history_content(history_path_str)
         if history_content is None:
             return
+
         editor = self.file_manager.editors_by_path.get(current_path_str)
 
         def on_restore_complete():
@@ -392,14 +400,10 @@ class MainController(QObject):
                 self.main_window.tab_widget.setCurrentIndex(
                     self.main_window.tab_widget.indexOf(editor)
                 )
-            for i in range(self.main_window.tab_widget.count()):
-                widget = self.main_window.tab_widget.widget(i)
-                if (
-                    isinstance(widget, DiffEditorWidget)
-                    and getattr(widget, "history_path_str", None) == history_path_str
-                ):
-                    self.main_window.tab_widget.removeTab(i)
-                    break
+            if self.main_window.tab_widget.indexOf(diff_widget) != -1:
+                self.main_window.tab_widget.removeTab(
+                    self.main_window.tab_widget.indexOf(diff_widget)
+                )
             if editor:
                 self.file_manager.mark_file_clean(editor)
 

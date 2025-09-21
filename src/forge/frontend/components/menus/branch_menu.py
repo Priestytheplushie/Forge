@@ -29,17 +29,10 @@ class BranchMenu(QMenu):
         self.remote_icon = get_cloud_icon()
         self.check_icon = get_check_icon()
         self.trash_icon = get_trash_icon()
-
-        self.dynamic_actions = []
         self.current_branch = ""
-
-        self.create_action = QAction("Create New Branch...", self)
-        self.manage_action = QAction("Manage Branches...", self)
 
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
-        self.create_action.triggered.connect(self.create_branch_requested)
-        self.manage_action.triggered.connect(self.manage_branches_requested)
         self.triggered.connect(self._on_action_triggered)
 
     def populate_branches(self, branch_data: dict, current_branch: str):
@@ -58,8 +51,13 @@ class BranchMenu(QMenu):
                 self.addAction(self._create_branch_action(branch_name, is_remote=True))
 
         self.addSeparator()
-        self.addAction(self.create_action)
-        self.addAction(self.manage_action)
+        create_action = QAction("Create New Branch...", self)
+        create_action.triggered.connect(self.create_branch_requested)
+        self.addAction(create_action)
+
+        manage_action = QAction("Manage Branches...", self)
+        manage_action.triggered.connect(self.manage_branches_requested)
+        self.addAction(manage_action)
 
     def _create_branch_action(self, branch_name: str, is_remote: bool) -> QAction:
         display_name = (

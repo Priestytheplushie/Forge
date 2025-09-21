@@ -207,6 +207,7 @@ class MainWindow(QMainWindow):
         self._preloaded_editor = EditorWidget(
             self.theme_manager.get_current_theme_data(), self
         )
+        self._preloaded_editor.setParent(self)
         self._preloaded_editor.setVisible(False)
         print("Web Engine pre-loading initiated.")
 
@@ -272,7 +273,7 @@ class MainWindow(QMainWindow):
 
         index = self.tab_widget.addTab(widget, icon, tab_title)
         self.tab_widget.setCurrentIndex(index)
-        self.status_bar.showMessage(f"Opened {file_path}", 5000)
+
         self.controller._update_ui_for_editor(widget)
 
     def get_current_editor(self):

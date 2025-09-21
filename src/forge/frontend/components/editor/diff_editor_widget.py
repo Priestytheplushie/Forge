@@ -11,7 +11,7 @@ from .editor_bridge import DiffBridge
 
 
 class DiffEditorWidget(QWidget):
-    primary_action_requested = Signal(object)
+    primary_action_requested = Signal()
     stage_lines_requested = Signal(str)
 
     def __init__(self, theme_data: dict, parent=None):
@@ -39,9 +39,7 @@ class DiffEditorWidget(QWidget):
         self.bridge.stage_lines_requested.connect(self.stage_lines_requested)
 
         self.primary_action_button = QPushButton("Action", self)
-        self.primary_action_button.clicked.connect(
-            lambda: self.primary_action_requested.emit(self)
-        )
+        self.primary_action_button.clicked.connect(self.primary_action_requested)
         self.primary_action_button.setStyleSheet("""
             QPushButton { 
                 background-color: #3C3F41; color: #D8DEE9; border: 1px solid #555555; 
