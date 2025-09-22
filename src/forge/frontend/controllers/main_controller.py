@@ -375,6 +375,9 @@ class MainController(QObject):
         elif action == "clone_repo":
             self.git_controller.on_clone_repo_requested()
 
+    def _get_current_timeline_file(self):
+        return self.main_window.timeline_panel.current_file_path
+
     @Slot(dict)
     def on_history_item_selected(self, data: dict):
         current_file_path = self._get_current_timeline_file()

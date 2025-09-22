@@ -221,3 +221,4 @@ __marimo__/
 .forge/
 sandbox/
 scripts/
+test.py
