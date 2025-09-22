@@ -1,4 +1,5 @@
 import os
+import shutil
 from pathlib import Path
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QWidget
 from PySide6.QtCore import QObject, Slot, Signal
@@ -160,7 +161,6 @@ class FileManager(QObject):
         for i in reversed(range(self.main_window.tab_widget.count())):
             widget = self.main_window.tab_widget.widget(i)
             if widget and widget.property("is_merge_editor"):
-
                 if hasattr(widget, "exit_merge_mode"):
                     widget.exit_merge_mode()
                 self.handle_close_tab(i, force=True)
@@ -209,7 +209,7 @@ class FileManager(QObject):
             index = self.main_window.tab_widget.indexOf(editor_to_close)
             if index != -1:
                 self.dirty_editors.discard(editor_to_close)
-                self.handle_close_tab(index)
+                self.handle_close_tab(index, force=True)
 
     def save_file(self, editor=None):
         if editor is None:
@@ -299,7 +299,7 @@ class FileManager(QObject):
                         "Exists",
                         "A file with that name already exists.",
                     )
-            except Exception as e:
+            except OSError as e:
                 QMessageBox.critical(
                     self.main_window, "Error", f"Could not create file:\n{e}"
                 )
@@ -312,14 +312,16 @@ class FileManager(QObject):
         if ok and folder_name:
             new_path = Path(parent_dir) / folder_name
             try:
-                new_path.mkdir(exist_ok=False)
+                new_path.mkdir(exist_ok=True)
+                if not new_path.is_dir():
+                    raise OSError("Folder creation failed unexpectedly.")
             except FileExistsError:
                 QMessageBox.warning(
                     self.main_window,
                     "Exists",
-                    "A folder with that name already exists.",
+                    "A folder or file with that name already exists.",
                 )
-            except Exception as e:
+            except OSError as e:
                 QMessageBox.critical(
                     self.main_window, "Error", f"Could not create folder:\n{e}"
                 )
@@ -335,15 +337,13 @@ class FileManager(QObject):
             new_path = path.with_name(new_name)
             try:
                 path.rename(new_path)
-            except Exception as e:
+            except OSError as e:
                 QMessageBox.critical(
                     self.main_window, "Error", f"Could not rename item:\n{e}"
                 )
 
     @Slot(str)
     def handle_delete_item(self, path_str):
-        import shutil
-
         path = Path(path_str)
         is_dir = path.is_dir()
         item_type = "folder" if is_dir else "file"
@@ -360,7 +360,7 @@ class FileManager(QObject):
                     shutil.rmtree(path)
                 else:
                     path.unlink()
-            except Exception as e:
+            except OSError as e:
                 QMessageBox.critical(
                     self.main_window, "Error", f"Could not delete {item_type}:\n{e}"
                 )

@@ -76,22 +76,23 @@ class FileExplorer(QTreeView):
     def on_context_menu(self, point):
         """Creates and shows the context menu."""
         proxy_index = self.indexAt(point)
-        if not proxy_index.isValid():
-            source_index = self.source_model.index(self.source_model.rootPath())
-        else:
-            source_index = self.proxy_model.mapToSource(proxy_index)
+        is_valid_index = proxy_index.isValid()
 
-        path = self.source_model.filePath(source_index)
-        is_dir = self.source_model.isDir(source_index)
+        if is_valid_index:
+            source_index = self.proxy_model.mapToSource(proxy_index)
+            path = self.source_model.filePath(source_index)
+            is_dir = self.source_model.isDir(source_index)
+            new_item_parent_dir = path if is_dir else os.path.dirname(path)
+        else:
+
+            path = self.source_model.rootPath()
+            is_dir = True
+            new_item_parent_dir = path
 
         menu = QMenu(self)
 
         action_new_file = QAction("New File...", self)
         action_new_folder = QAction("New Folder...", self)
-        action_rename = QAction("Rename...", self)
-        action_delete = QAction("Delete", self)
-
-        new_item_parent_dir = path if is_dir else os.path.dirname(path)
 
         action_new_file.triggered.connect(
             lambda: self.new_file_requested.emit(new_item_parent_dir)
@@ -99,14 +100,20 @@ class FileExplorer(QTreeView):
         action_new_folder.triggered.connect(
             lambda: self.new_folder_requested.emit(new_item_parent_dir)
         )
-        action_rename.triggered.connect(lambda: self.rename_item_requested.emit(path))
-        action_delete.triggered.connect(lambda: self.delete_item_requested.emit(path))
 
         menu.addAction(action_new_file)
         menu.addAction(action_new_folder)
 
-        if proxy_index.isValid():
+        if is_valid_index:
             menu.addSeparator()
+            action_rename = QAction("Rename...", self)
+            action_delete = QAction("Delete", self)
+            action_rename.triggered.connect(
+                lambda: self.rename_item_requested.emit(path)
+            )
+            action_delete.triggered.connect(
+                lambda: self.delete_item_requested.emit(path)
+            )
             menu.addAction(action_rename)
             menu.addAction(action_delete)
 
@@ -114,17 +121,26 @@ class FileExplorer(QTreeView):
         refactor_menu = menu.addMenu("Refactor")
 
         can_refactor = is_dir or path.endswith(".py")
-        if can_refactor:
+        if can_refactor and is_valid_index:
+            has_tools = False
             for tool in self.refactor_tool_definitions:
-                if "directory" in tool["scopes"]:
+
+                allowed_scope = ("directory" in tool["scopes"] and is_dir) or (
+                    "file" in tool["scopes"] and not is_dir
+                )
+                if allowed_scope:
+                    has_tools = True
                     if tool.get("separator_before"):
                         refactor_menu.addSeparator()
-                    action = refactor_menu.addAction(tool["name_path"])
+
+                    action = refactor_menu.addAction(tool["name"])
                     action.triggered.connect(
                         lambda checked=False, tool_id=tool[
                             "id"
                         ], p=path: self.refactor_requested.emit(tool_id, p)
                     )
+            if not has_tools:
+                refactor_menu.setEnabled(False)
         else:
             refactor_menu.setEnabled(False)
 
