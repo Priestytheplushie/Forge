@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QFileInfo, Slot, Signal
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QActionGroup
 import os
+from pathlib import Path
 
 from ..components.panels.file_explorer import FileExplorer
 from ..components.panels.source_control_panel import SourceControlPanel
@@ -46,6 +47,7 @@ from ..controllers.file_manager import FileManager
 from ..controllers.workspace_manager import WorkspaceManager
 from ..controllers.run_manager import RunManager
 from ..controllers.lsp_client import LSPClient
+from .about_dialog import AboutDialog
 
 
 class ClickableStatusBarWidget(QWidget):
@@ -505,7 +507,16 @@ class MainWindow(QMainWindow):
 
     def _create_help_menu(self, menu_bar):
         help_menu = menu_bar.addMenu("&Help")
-        help_menu.addAction(QAction("&About Forge", self))
+
+        about_action = QAction("&About Forge", self)
+        about_action.triggered.connect(self.on_about)
+        help_menu.addAction(about_action)
+
+    @Slot()
+    def on_about(self):
+        """Shows the About dialog."""
+        dialog = AboutDialog(Path(self.app_root), self)
+        dialog.exec()
 
     def show_editor_view(self):
         if self.central_stack.currentWidget() is not self.tab_widget:
