@@ -26,6 +26,12 @@
     "colors": {
         "editor.background": "#282c34",
         "editor.foreground": "#abb2bf",
+        "sideBar.background": "#21252b",
+        "sideBar.border": "#181a1f",
+        "list.activeSelectionBackground": "#2c313a",
+        "list.activeSelectionForeground": "#ffffff",
+        "list.inactiveSelectionBackground": "#2c313a",
+        "list.inactiveSelectionForeground": "#abb2bf",
         "editor.selectionBackground": "#3e4451",
         "editor.lineHighlightBackground": "#2c313a",
         "editorCursor.foreground": "#528bff",

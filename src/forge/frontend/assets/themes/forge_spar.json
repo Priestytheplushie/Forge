@@ -26,9 +26,15 @@
     "colors": {
         "editor.background": "#fdfdfd",
         "editor.foreground": "#24292e",
+        "sideBar.background": "#f6f8fa",
+        "sideBar.border": "#e1e4e8",
+        "list.activeSelectionBackground": "#0366d6",
+        "list.activeSelectionForeground": "#ffffff",
+        "list.inactiveSelectionBackground": "#e8eaed",
+        "list.inactiveSelectionForeground": "#24292e",
         "editor.selectionBackground": "#cce5ff",
         "editor.lineHighlightBackground": "#f1f1f1",
-        "editorCursor.foreground": "#D9880F",
+        "editorCursor.foreground": "#044289",
         "editorWhitespace.foreground": "#d1d5da",
         "diffEditor.insertedTextBackground": "#a0e8a080",
         "diffEditor.removedTextBackground": "#ffb0b080"

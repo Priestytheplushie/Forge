@@ -20,7 +20,6 @@ from forge.frontend.windows.main_window import MainWindow
 def main():
     """Initializes and runs the Forge application."""
     app = QApplication(sys.argv)
-
     window = MainWindow(app_root=str(APP_ROOT_PATH))
 
     window.show()

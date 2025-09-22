@@ -75,7 +75,6 @@ class GitManager(QObject):
         self.refresh_timer.stop()
         try:
             self.repo = git.Repo(path, search_parent_directories=True)
-            self._log(f"Git repository found at: {self.repo.working_dir}")
             self.repo_status_changed.emit(True)
             self.refresh_status()
             self.refresh_timer.start()
@@ -84,7 +83,6 @@ class GitManager(QObject):
             self.repo_status_changed.emit(False)
             self.branches_updated.emit({}, "")
         except Exception as e:
-            self._log(f"Error initializing Git: {e}")
             self.repo = None
             self.repo_status_changed.emit(False)
             self.branches_updated.emit({}, "")
@@ -96,14 +94,12 @@ class GitManager(QObject):
         self.get_all_branches()
         if (Path(self.repo.git_dir) / "MERGE_HEAD").exists():
             unresolved, staged = set(), set()
-
             for line in self.repo.git.status("--porcelain").strip().split("\n"):
                 if not line:
                     continue
-                status, path = line[:2], line[3:]
+                status, path = line[:2], line[3:].strip().replace('"', "")
                 if status in ("DD", "AU", "UD", "UA", "DU", "AA", "UU"):
                     unresolved.add(path)
-
                 if status[0] != " " and status not in (
                     "DD",
                     "AU",
@@ -119,7 +115,6 @@ class GitManager(QObject):
             staged = {p for p in staged if not p.startswith(".forge/")}
 
             if not self.is_in_merge_conflict:
-                self._log("Merge conflict state detected.")
                 self.is_in_merge_conflict = True
                 self.merge_conflict_detected.emit(sorted(list(unresolved)))
 
@@ -160,8 +155,11 @@ class GitManager(QObject):
             else:
                 self.remote_status_changed.emit(0, 0)
         except TypeError:
-            self.current_branch = self.repo.head.object.hexsha[:7]
-            self.branch_changed.emit(self.current_branch)
+            try:
+                self.current_branch = self.repo.head.object.hexsha[:7]
+                self.branch_changed.emit(self.current_branch)
+            except Exception:
+                self.branch_changed.emit("Detached HEAD")
             self.remote_status_changed.emit(0, 0)
             return
         except Exception:
@@ -199,8 +197,7 @@ class GitManager(QObject):
                     }
                 )
             return history
-        except Exception as e:
-            self._log(f"Error getting commit history for {file_path_str}: {e}")
+        except Exception:
             return []
 
     def get_commit_diff(self, file_path_str: str, sha: str) -> tuple[str, str]:
@@ -217,8 +214,12 @@ class GitManager(QObject):
                     original_content = self.repo.git.show(
                         f"{parent_sha}:{relative_path}"
                     )
-                except git.GitCommandError:
-                    original_content = ""
+
+                except git.GitCommandError as e:
+                    if "exists on disk, but not in" in e.stderr:
+                        original_content = ""
+                    else:
+                        raise e
             return (original_content, modified_content)
         except Exception as e:
             self._log(f"Error getting commit diff: {e}")
@@ -237,8 +238,7 @@ class GitManager(QObject):
                     if ref.name != f"{remote.name}/HEAD":
                         all_branches["remote"].append((ref.name, "up-to-date"))
             self.branches_updated.emit(all_branches, current_branch_name)
-        except Exception as e:
-            self._log(f"Error fetching branches: {e}")
+        except Exception:
             self.branches_updated.emit({}, "")
 
     @Slot(str)
@@ -246,51 +246,38 @@ class GitManager(QObject):
         if not self.repo:
             return
         try:
-            self._log(f"Checking out branch '{branch_name}'...")
             self.repo.git.checkout(branch_name)
-            self._log("Checkout successful.")
             self.refresh_status()
         except git.GitCommandError as e:
             self._log(f"Error checking out branch: {e.stderr.strip()}")
-        except Exception as e:
-            self._log(f"An unexpected error occurred during checkout: {e}")
 
     @Slot(str, str)
     def create_branch(self, name: str, base: str):
         if not self.repo:
             return
         try:
-            self._log(f"Creating new branch '{name}' from '{base}'...")
             new_branch = self.repo.create_head(name, base)
             new_branch.checkout()
-            self._log(f"Successfully created and switched to branch '{name}'.")
             self.refresh_status()
         except git.GitCommandError as e:
             self._log(f"Error creating branch: {e.stderr.strip()}")
-        except Exception as e:
-            self._log(f"An unexpected error occurred during branch creation: {e}")
 
     @Slot(str, bool, str)
     def merge_branch(self, target_branch: str, squash: bool = False, message: str = ""):
         if not self.repo:
             return
         try:
-            self._log(f"Merging '{target_branch}' into '{self.current_branch}'...")
             args = ["--no-ff"]
             if squash:
                 args.append("--squash")
             self.repo.git.merge(target_branch, *args)
             if squash:
                 self.repo.index.commit(message)
-                self._log("Squash merge successful.")
-            else:
-                if message:
-                    self.repo.index.commit(message)
-                self._log("Merge command successful.")
+            elif message:
+                self.repo.index.commit(message)
             self.refresh_status()
         except git.GitCommandError as e:
             if "merge conflict" in e.stderr.lower():
-                self._log(f"Merge conflict detected. Please resolve conflicts.")
                 self.refresh_status()
             else:
                 self._log(f"Error merging: {e.stderr.strip()}")
@@ -300,18 +287,13 @@ class GitManager(QObject):
         if not self.repo:
             return
         try:
-            self._log(f"Rebasing '{self.current_branch}' onto '{target_branch}'...")
             self.repo.git.rebase(target_branch)
-            self._log("Rebase successful.")
             self.refresh_status()
         except git.GitCommandError as e:
             if (
                 "merge conflict" in e.stderr.lower()
                 or "could not apply" in e.stderr.lower()
             ):
-                self._log(
-                    f"Rebase conflict detected. Please resolve conflicts and continue or abort."
-                )
                 self.refresh_status()
             else:
                 self._log(f"Error rebasing: {e.stderr.strip()}")
@@ -321,9 +303,7 @@ class GitManager(QObject):
         if not self.repo:
             return
         try:
-            self._log(f"Renaming branch '{old_name}' to '{new_name}'...")
             self.repo.git.branch("-m", old_name, new_name)
-            self._log("Rename successful.")
             self.refresh_status()
         except git.GitCommandError as e:
             self._log(f"Error renaming branch: {e.stderr.strip()}")
@@ -335,13 +315,9 @@ class GitManager(QObject):
         try:
             if is_remote:
                 remote_name, remote_branch_name = branch_name.split("/", 1)
-                self._log(f"Deleting remote branch '{branch_name}'...")
                 self.repo.git.push(remote_name, "--delete", remote_branch_name)
-                self._log("Remote branch deleted successfully.")
             else:
-                self._log(f"Deleting local branch '{branch_name}'...")
                 self.repo.git.branch("-d", branch_name)
-                self._log("Local branch deleted successfully.")
             self.refresh_status()
         except git.GitCommandError as e:
             self._log(f"Error deleting branch: {e.stderr.strip()}")
@@ -350,14 +326,12 @@ class GitManager(QObject):
         if self.workspace_path and not self.repo:
             try:
                 self.repo = git.Repo.init(self.workspace_path)
-                self._log(f"Initialized empty repository at: {self.workspace_path}")
                 self.set_workspace_path(self.workspace_path)
             except Exception as e:
                 self._log(f"Error initializing repository: {e}")
 
     def clone_repo(self, url: str, path: str):
         if self.clone_worker and self.clone_worker.isRunning():
-            self._log("A clone operation is already in progress.")
             return
         self.clone_worker = CloneWorker(url, path)
         self.clone_worker.progress.connect(self.clone_progress)
@@ -366,68 +340,47 @@ class GitManager(QObject):
 
     def fetch(self):
         if not self.repo or not self.repo.remotes:
-            self._log("Error: No remote repository configured.")
             return
         try:
-            self._log(f"Fetching from '{self.repo.remotes.origin.name}'...")
             self.repo.remotes.origin.fetch()
-            self._log("Fetch successful.")
             self.refresh_status()
         except Exception as e:
             self._log(f"Error fetching: {e}")
 
     def pull(self):
         if not self.repo or not self.repo.remotes:
-            self._log("Error: No remote repository configured.")
             return
         try:
-            self._log(f"Pulling from '{self.repo.remotes.origin.name}'...")
             self.repo.remotes.origin.pull()
-            self._log("Pull successful.")
             self.refresh_status()
         except git.GitCommandError as e:
             if "merge conflict" in e.stderr.lower():
-                self._log("Pull resulted in merge conflicts. Please resolve them.")
                 self.refresh_status()
             else:
                 self._log(f"Error pulling: {e.stderr.strip()}")
-        except Exception as e:
-            self._log(f"An unexpected error occurred during pull: {e}")
 
     def push(self):
         if not self.repo or not self.repo.remotes:
-            self._log("Error: No remote repository configured.")
             return
         try:
-            self._log(f"Pushing to '{self.repo.remotes.origin.name}'...")
             self.repo.remotes.origin.push()
-            self._log("Push successful.")
             self.refresh_status()
         except git.GitCommandError as e:
             if "no upstream branch" in e.stderr:
                 self.upstream_branch_not_found.emit()
             else:
                 self._log(f"Error pushing: {e.stderr.strip()}")
-        except Exception as e:
-            self._log(f"An unexpected error occurred during push: {e}")
 
     def push_and_set_upstream(self):
         if not self.repo or not self.repo.remotes:
-            self._log("Error: No remote repository configured.")
             return
         try:
-            self._log(
-                f"Pushing and setting upstream for branch '{self.current_branch}'..."
-            )
             self.repo.git.push(
                 "--set-upstream", self.repo.remotes.origin.name, self.current_branch
             )
-            self._log("Push successful.")
             self.refresh_status()
         except git.GitCommandError as e:
             self._log(f"Error pushing: {e.stderr.strip()}")
-        except Exception as e:
-            self._log(f"An unexpected error occurred during push: {e}")
 
     def abort_merge(self):
         if not self.repo:
@@ -435,11 +388,8 @@ class GitManager(QObject):
         try:
             if (Path(self.repo.git_dir) / "MERGE_HEAD").exists():
                 self.repo.git.merge("--abort")
-                self._log("Merge aborted.")
                 self.is_in_merge_conflict = False
                 self.refresh_status()
-            else:
-                self._log("No active merge to abort.")
         except Exception as e:
             self._log(f"Error aborting merge: {e}")
 
@@ -492,7 +442,6 @@ class GitManager(QObject):
             if stage_all:
                 self.repo.git.add(A=True)
             self.repo.index.commit(message)
-            self._log(f'Committed changes with message: "{message}"')
             self.is_in_merge_conflict = False
             self.refresh_status()
         except Exception as e:
@@ -503,34 +452,40 @@ class GitManager(QObject):
             return
         try:
             self.repo.git.stash("push", "-m", message)
-            self._log("Stashed changes.")
             self.refresh_status()
         except Exception as e:
             self._log(f"Error stashing changes: {e}")
 
-    def discard_changes(self, file_path_str: str):
+    def discard_changes(self, file_paths: list[str]):
         if not self.repo:
             return
         try:
-            full_path = Path(self.repo.working_dir) / file_path_str
-            if file_path_str in self.repo.untracked_files:
+            untracked_in_selection = [
+                p for p in file_paths if p in self.repo.untracked_files
+            ]
+            tracked_in_selection = [
+                p for p in file_paths if p not in untracked_in_selection
+            ]
+
+            for file_path_str in untracked_in_selection:
+                full_path = Path(self.repo.working_dir) / file_path_str
                 if full_path.is_file():
                     os.remove(full_path)
-            else:
-                self.repo.git.checkout("--", file_path_str)
+
+            if tracked_in_selection:
+                self.repo.git.checkout("--", *tracked_in_selection)
+
             self.refresh_status()
         except Exception as e:
-            self._log(f"Error discarding changes for {file_path_str}: {e}")
+            self._log(f"Error discarding changes: {e}")
 
     def get_head_content(self, file_path_str: str) -> str | None:
-        """Retrieves the content of a file from the HEAD commit."""
         if not self.repo:
             return None
         try:
-            return self.repo.git.show(f"HEAD:{file_path_str}")
+            relative_path = str(Path(file_path_str).relative_to(self.repo.working_dir))
+            return self.repo.git.show(f"HEAD:{relative_path}")
         except git.GitCommandError:
-
             return ""
         except Exception as e:
-            print(f"[GitManager] Error getting HEAD content for {file_path_str}: {e}")
             return None

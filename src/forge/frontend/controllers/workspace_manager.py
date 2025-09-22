@@ -1,6 +1,8 @@
 import os
+import json
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from PySide6.QtCore import QObject, Slot, Signal
+from pathlib import Path
 
 from forge.backend.lsp.manager import LSPManager
 from forge.backend.project.scanner import detect_python_project_layout
@@ -20,15 +22,34 @@ class WorkspaceManager(QObject):
         self.app_root = app_root
         self.workspace_path = None
         self.lsp_manager = None
-        self._connect_signals()
 
-    def _connect_signals(self):
-        self.main_window.welcome_file_explorer.open_folder_button.clicked.connect(
-            self.open_workspace_dialog
-        )
-        self.main_window.file_menu.actions()[1].triggered.connect(
-            self.open_workspace_dialog
-        )
+        self.settings_path = Path(app_root) / ".forge" / "settings.json"
+        self.recent_projects = self._load_recent_projects()
+
+    def _load_recent_projects(self) -> list:
+        try:
+            if self.settings_path.exists():
+                with open(self.settings_path, "r") as f:
+                    settings = json.load(f)
+                    return settings.get("recent_projects", [])
+        except (IOError, json.JSONDecodeError):
+            pass
+        return []
+
+    def _save_recent_projects(self):
+        try:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.settings_path, "w") as f:
+                json.dump({"recent_projects": self.recent_projects}, f, indent=2)
+        except IOError:
+            pass
+
+    def _add_to_recent_projects(self, path: str):
+        if path in self.recent_projects:
+            self.recent_projects.remove(path)
+        self.recent_projects.insert(0, path)
+        self.recent_projects = self.recent_projects[:10]
+        self._save_recent_projects()
 
     @Slot()
     def open_workspace_dialog(self):
@@ -39,10 +60,10 @@ class WorkspaceManager(QObject):
             self.set_workspace(path)
 
     def set_workspace(self, path: str):
-
         self.workspace_will_change.emit()
 
         self.workspace_path = path
+        self._add_to_recent_projects(path)
         self.main_window.setWindowTitle(f"Forge - {os.path.basename(path)}")
 
         if (

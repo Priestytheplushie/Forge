@@ -23,11 +23,17 @@
         {"token": "namespace.defaultLibrary", "foreground": "88C0D0"},
         {"token": "type.defaultLibrary", "foreground": "88C0D0"},
         {"token": "function.defaultLibrary", "foreground": "88C0D0"},
-        {"token": "variable.defaultLibrary", "foreground": "88C0D0"}
+        {"token": "variable.defaultLibrary", "foreground": "D8DEE9"}
     ],
     "colors": {
         "editor.background": "#1e2127",
         "editor.foreground": "#D8DEE9",
+        "sideBar.background": "#191b1f",
+        "sideBar.border": "#2c313a",
+        "list.activeSelectionBackground": "#2c313a",
+        "list.activeSelectionForeground": "#ffffff",
+        "list.inactiveSelectionBackground": "#282c34",
+        "list.inactiveSelectionForeground": "#d8deee",
         "editor.selectionBackground": "#3B4252",
         "editor.lineHighlightBackground": "#282C34",
         "editorCursor.foreground": "#D9880F",

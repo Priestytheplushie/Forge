@@ -78,6 +78,32 @@ def _get_colorized_icon(icon_filename: str, color: QColor) -> QIcon:
     return colorized_icon
 
 
+def get_themed_icon(icon_filename: str, color_hex: str) -> Path:
+    """Creates a colorized icon file in a temp dir for QSS usage and returns its path."""
+    temp_dir = Path.home() / ".forge" / "temp" / "icons"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_color_hex = color_hex.replace("#", "")
+    themed_icon_path = temp_dir / f"{Path(icon_filename).stem}_{safe_color_hex}.svg"
+
+    if themed_icon_path.exists():
+        return themed_icon_path
+
+    icon_path = ICON_ROOT / icon_filename
+    if not icon_path.exists():
+        return Path()
+
+    with open(icon_path, "r") as f:
+        svg_data = f.read()
+
+    colored_svg = svg_data.replace('stroke="currentColor"', f'stroke="{color_hex}"')
+
+    with open(themed_icon_path, "w") as f:
+        f.write(colored_svg)
+
+    return themed_icon_path
+
+
 def get_rotated_icon(icon_filename: str, color: QColor, degrees: int) -> QIcon:
     """Creates and caches a rotated version of an icon."""
     cache_key = (icon_filename, color.name(), degrees)

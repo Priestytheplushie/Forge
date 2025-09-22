@@ -89,7 +89,7 @@ class SourceControlPanel(QWidget):
     open_file_requested = Signal(str)
     show_history_requested = Signal(str)
     reveal_in_explorer_requested = Signal(str)
-    discard_changes_requested = Signal(list)
+    discard_changes_requested = Signal(object, list)
     stage_requested = Signal(list)
     unstage_requested = Signal(list)
     stage_all_requested = Signal()
@@ -428,8 +428,9 @@ class SourceControlPanel(QWidget):
             menu.addAction("Stage Changes").triggered.connect(
                 lambda: self.stage_requested.emit(file_paths)
             )
+
         menu.addAction("Discard Changes").triggered.connect(
-            lambda: self.discard_changes_requested.emit(file_paths)
+            lambda: self.discard_changes_requested.emit(None, file_paths)
         )
         menu.exec(sender_list.mapToGlobal(point))
 

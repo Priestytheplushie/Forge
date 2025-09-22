@@ -120,6 +120,9 @@ class MainController(QObject):
         self.main_window.source_control_panel.file_selected.connect(
             self.git_controller.on_git_file_selected
         )
+        self.main_window.source_control_panel.discard_changes_requested.connect(
+            self.on_discard_changes_requested
+        )
         self.main_window.conflicts_panel.file_selected.connect(
             self.git_controller.on_conflict_file_selected
         )
@@ -136,13 +139,25 @@ class MainController(QObject):
         self.autosave_timer.timeout.connect(self.trigger_autosave)
 
         self.main_window.welcome_screen.action_triggered.connect(self.on_welcome_action)
+        self.main_window.welcome_screen.open_recent_requested.connect(
+            self.workspace_manager.set_workspace
+        )
+        self.main_window.file_menu.actions()[1].triggered.connect(
+            self.workspace_manager.open_workspace_dialog
+        )
+        self.main_window.welcome_file_explorer.open_folder_button.clicked.connect(
+            self.workspace_manager.open_workspace_dialog
+        )
+        self.main_window.welcome_file_explorer.clone_repo_button.clicked.connect(
+            self.git_controller.on_clone_repo_requested
+        )
+
         self.main_window.tab_widget.currentChanged.connect(self.on_tab_changed)
 
         self.theme_manager.theme_changed.connect(self.on_theme_changed)
 
         timeline_panel = self.main_window.timeline_panel
         timeline_panel.history_item_selected.connect(self.on_history_item_selected)
-
         timeline_panel.item_single_clicked.connect(self.on_history_item_selected)
         timeline_panel.restore_requested.connect(self.on_history_restore_requested)
         timeline_panel.delete_requested.connect(self.on_history_delete_requested)
@@ -250,6 +265,7 @@ class MainController(QObject):
                 editor.apply_theme(theme_data)
         if self.main_window._preloaded_editor:
             self.main_window._preloaded_editor.apply_theme(theme_data)
+        self.main_window.welcome_screen.apply_theme(theme_data)
 
     def _update_ui_for_editor(self, editor):
         is_diff = isinstance(editor, DiffEditorWidget)
@@ -284,7 +300,6 @@ class MainController(QObject):
             timeline_panel.list_view_button.setChecked(True)
 
     def _update_timeline_for_editor(self, editor):
-
         is_history_view = getattr(editor, "metadata", {}).get("is_history_view", False)
         if is_history_view:
             return
@@ -319,15 +334,46 @@ class MainController(QObject):
         unified_history.sort(key=lambda x: x["timestamp"], reverse=True)
         self.main_window.timeline_panel.update_view(file_path, unified_history)
 
+    def _populate_timeline_details(self, data: dict):
+        current_file_path = self._get_current_timeline_file()
+        if not current_file_path:
+            return
+
+        details = {}
+        panel = self.main_window.timeline_panel
+
+        if data["type"] == "save":
+            details = {
+                "full_path": data["path"],
+                "filename": Path(current_file_path).name,
+                "full_time": panel._format_timestamp(data["timestamp"], relative=False),
+                "relative_time": panel._format_timestamp(
+                    data["timestamp"], relative=True
+                ),
+                "additions": data["meta"].get("additions", "N/A"),
+                "deletions": data["meta"].get("deletions", "N/A"),
+            }
+        elif data["type"] == "commit":
+            details = {
+                "full_path": current_file_path,
+                "filename": Path(current_file_path).name,
+                "full_time": panel._format_timestamp(data["timestamp"], relative=False),
+                "relative_time": panel._format_timestamp(
+                    data["timestamp"], relative=True
+                ),
+                "additions": "N/A",
+                "deletions": "N/A",
+            }
+
+        if details:
+            panel.show_details_view(details)
+
     @Slot(str)
     def on_welcome_action(self, action: str):
         if action == "open_folder":
             self.workspace_manager.open_workspace_dialog()
         elif action == "clone_repo":
             self.git_controller.on_clone_repo_requested()
-
-    def _get_current_timeline_file(self):
-        return self.main_window.timeline_panel.current_file_path
 
     @Slot(dict)
     def on_history_item_selected(self, data: dict):
@@ -387,41 +433,6 @@ class MainController(QObject):
             QMessageBox.critical(
                 self.main_window, "Error", f"Failed to create diff view: {e}"
             )
-
-    def _populate_timeline_details(self, data: dict):
-        """Helper to populate the timeline details panel based on item data."""
-        current_file_path = self._get_current_timeline_file()
-        if not current_file_path:
-            return
-
-        details = {}
-        panel = self.main_window.timeline_panel
-
-        if data["type"] == "save":
-            details = {
-                "full_path": data["path"],
-                "filename": Path(current_file_path).name,
-                "full_time": panel._format_timestamp(data["timestamp"], relative=False),
-                "relative_time": panel._format_timestamp(
-                    data["timestamp"], relative=True
-                ),
-                "additions": data["meta"].get("additions", "N/A"),
-                "deletions": data["meta"].get("deletions", "N/A"),
-            }
-        elif data["type"] == "commit":
-            details = {
-                "full_path": current_file_path,
-                "filename": Path(current_file_path).name,
-                "full_time": panel._format_timestamp(data["timestamp"], relative=False),
-                "relative_time": panel._format_timestamp(
-                    data["timestamp"], relative=True
-                ),
-                "additions": "N/A",
-                "deletions": "N/A",
-            }
-
-        if details:
-            panel.show_details_view(details)
 
     @Slot(str)
     def on_history_restore_requested(self, history_path: str):
@@ -524,3 +535,33 @@ class MainController(QObject):
         uri = Path(history_path).as_uri()
         lang_id = self.file_manager.get_language_id(current_file_path)
         editor.set_content(content, lang_id, uri, on_editor_ready)
+
+    @Slot(object, list)
+    def on_discard_changes_requested(self, diff_widget, file_paths: list[str]):
+        if not file_paths:
+            return
+
+        file_name = os.path.basename(file_paths[0])
+        plural = "s" if len(file_paths) > 1 else ""
+        message = (
+            f"Are you sure you want to discard the change{plural} in '{file_name}'?"
+        )
+        if len(file_paths) > 1:
+            message = (
+                f"Are you sure you want to discard changes in {len(file_paths)} files?"
+            )
+
+        reply = QMessageBox.question(
+            self.main_window,
+            "Discard Changes",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.git_manager.discard_changes(file_paths)
+            if diff_widget:
+                index = self.main_window.tab_widget.indexOf(diff_widget)
+                if index != -1:
+                    self.main_window.tab_widget.removeTab(index)

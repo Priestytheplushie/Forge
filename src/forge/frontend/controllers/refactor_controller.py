@@ -51,7 +51,6 @@ class RefactorController(QObject):
         self.refactor_manager.review_session_started.connect(
             self.on_review_session_started
         )
-
         self.refactor_manager.log_message.connect(
             lambda msg: self.main_window.log_to_output(
                 "Refactor", msg, raise_panel=True
@@ -235,15 +234,7 @@ class RefactorController(QObject):
             self.review_session_data["changes"]
         )
 
-        self.main_window.file_explorer_dock.setVisible(False)
-        self.main_window.source_control_dock.setVisible(False)
-        self.main_window.timeline_dock.setVisible(False)
-        self.main_window.debug_console_dock.setVisible(False)
-
-        self.main_window.review_dock.setVisible(True)
-        self.main_window.review_dock.raise_()
-        self.main_window.problems_dock.raise_()
-        self.main_window.terminal_dock.raise_()
+        self.main_window.enter_review_mode()
 
     def exit_review_mode(self):
         if not self.in_review_mode:
@@ -268,11 +259,8 @@ class RefactorController(QObject):
         self.main_window.corner_stack.setCurrentWidget(
             self.main_window.normal_corner_widget
         )
-        self.main_window.review_dock.setVisible(False)
-        self.main_window.file_explorer_dock.setVisible(True)
-        self.main_window.source_control_dock.setVisible(True)
-        self.main_window.timeline_dock.setVisible(True)
-        self.main_window.file_explorer_dock.raise_()
+
+        self.main_window.exit_review_mode()
         self.git_manager.refresh_status()
 
     @Slot()
@@ -494,7 +482,6 @@ class RefactorController(QObject):
 
     @Slot(dict)
     def on_rename_response(self, workspace_edit: dict):
-        """Handles the LSP response for a rename operation and starts a review session."""
         changes = workspace_edit.get("changes", {})
         if not changes:
             QMessageBox.information(

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QComboBox,
     QTabBar,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QFileInfo, Slot, Signal
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QActionGroup
@@ -83,18 +84,13 @@ class MainWindow(QMainWindow):
 
         self.theme_manager = ThemeManager(self)
 
-        self._create_central_widget()
+        self.workspace_manager = WorkspaceManager(self, self.app_root)
+        self._create_central_widget(self.workspace_manager.recent_projects)
         self._create_docks()
         self._create_menu_bar()
         self._create_status_bar()
 
-        self.log_to_output("Run", "", clear=True)
-        self.log_to_output("Git", "", clear=True)
-        self.output_channel_combo.setCurrentIndex(0)
-
         self.file_manager = FileManager(self, self.theme_manager)
-
-        self.workspace_manager = WorkspaceManager(self, self.app_root)
         self.run_manager = RunManager(self, self.file_manager)
         self.lsp_client = LSPClient(self, self.file_manager)
 
@@ -106,6 +102,11 @@ class MainWindow(QMainWindow):
             self.run_manager,
             self.lsp_client,
         )
+
+        self.log_to_output("Run", "", clear=True)
+        self.log_to_output("Git", "", clear=True)
+        self.output_channel_combo.setCurrentIndex(0)
+
         self.workspace_manager.workspace_will_change.connect(
             self.controller.git_controller.exit_merge_mode
         )
@@ -114,8 +115,9 @@ class MainWindow(QMainWindow):
         self.terminal_dock.raise_()
         self._preload_web_engine()
 
+        self.theme_manager.set_theme(self.theme_manager.current_theme_name)
+
     def closeEvent(self, event: QCloseEvent):
-        print("[MainWindow] Close event triggered. Shutting down subsystems.")
         self.controller.shutdown()
         self.terminal.shutdown_all()
         event.accept()
@@ -217,16 +219,14 @@ class MainWindow(QMainWindow):
             self._initial_layout_applied = True
 
     def _preload_web_engine(self):
-        print("Pre-loading Web Engine...")
         self._preloaded_editor = EditorWidget(
             self.theme_manager.get_current_theme_data(), self
         )
         self._preloaded_editor.setParent(self)
         self._preloaded_editor.setVisible(False)
-        print("Web Engine pre-loading initiated.")
 
-    def _create_central_widget(self):
-        self.welcome_screen = WelcomeWidget(self)
+    def _create_central_widget(self, recent_projects: list):
+        self.welcome_screen = WelcomeWidget(recent_projects, self)
         self.tab_widget = self._create_tab_widget()
         self.central_stack = QStackedWidget()
         self.central_stack.addWidget(self.welcome_screen)
@@ -382,6 +382,12 @@ class MainWindow(QMainWindow):
         output_header_layout = QHBoxLayout(output_header)
         output_header_layout.setContentsMargins(5, 2, 5, 2)
         self.output_channel_combo = QComboBox()
+        self.output_channel_combo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.output_channel_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
         output_header_layout.addWidget(self.output_channel_combo)
         output_header_layout.addStretch()
         self.stop_action = QAction(get_stop_icon(), "Stop Process", self)
@@ -422,7 +428,6 @@ class MainWindow(QMainWindow):
         self._create_view_menu(menu_bar)
         self._create_go_menu(menu_bar)
         self.run_menu = menu_bar.addMenu("&Run")
-
         self._create_terminal_menu(menu_bar)
         self._create_help_menu(menu_bar)
 
@@ -470,8 +475,17 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction(self.file_explorer_dock.toggleViewAction())
         view_menu.addAction(self.source_control_dock.toggleViewAction())
-        view_menu.addAction(self.conflicts_dock.toggleViewAction())
-        view_menu.addAction(self.review_dock.toggleViewAction())
+
+        self.conflicts_action = self.conflicts_dock.toggleViewAction()
+        self.conflicts_action.setText("Conflicts")
+        self.conflicts_action.setEnabled(False)
+        view_menu.addAction(self.conflicts_action)
+
+        self.review_action = self.review_dock.toggleViewAction()
+        self.review_action.setText("Review")
+        self.review_action.setEnabled(False)
+        view_menu.addAction(self.review_action)
+
         view_menu.addAction(self.outline_dock.toggleViewAction())
         view_menu.addAction(self.timeline_dock.toggleViewAction())
         view_menu.addSeparator()
@@ -547,12 +561,30 @@ class MainWindow(QMainWindow):
         self.outline_dock.setVisible(True)
         self.file_explorer_dock.setVisible(False)
         self.timeline_dock.setVisible(False)
-
+        self.conflicts_action.setEnabled(True)
         self.conflicts_dock.raise_()
         self.source_control_dock.raise_()
 
     def exit_merge_mode(self):
         self.conflicts_dock.setVisible(False)
         self.file_explorer_dock.setVisible(True)
+        self.timeline_dock.setVisible(True)
+        self.conflicts_action.setEnabled(False)
+        self.file_explorer_dock.raise_()
+
+    def enter_review_mode(self):
+        self.review_action.setEnabled(True)
+        self.file_explorer_dock.setVisible(False)
+        self.source_control_dock.setVisible(False)
+        self.timeline_dock.setVisible(False)
+        self.debug_console_dock.setVisible(False)
+        self.review_dock.setVisible(True)
+        self.review_dock.raise_()
+
+    def exit_review_mode(self):
+        self.review_action.setEnabled(False)
+        self.review_dock.setVisible(False)
+        self.file_explorer_dock.setVisible(True)
+        self.source_control_dock.setVisible(True)
         self.timeline_dock.setVisible(True)
         self.file_explorer_dock.raise_()

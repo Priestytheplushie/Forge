@@ -13,31 +13,16 @@ import time
 from .editor_bridge import EditorBridge
 
 
-def _console_level_to_str(level):
-    mapping = {
-        QWebEnginePage.JavaScriptConsoleMessageLevel.InfoMessageLevel: "INFO",
-        QWebEnginePage.JavaScriptConsoleMessageLevel.WarningMessageLevel: "WARNING",
-        QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel: "ERROR",
-    }
-    return mapping.get(level, f"UNKNOWN({level})")
-
-
 class RecoverableWebEnginePage(QWebEnginePage):
     """A QWebEnginePage that detects critical JS errors and emits a Python signal."""
 
     critical_js_error_detected = Signal()
 
     def javaScriptConsoleMessage(self, level, message, line_number, source_id):
-        """Override to intercept console messages."""
-        level_str = _console_level_to_str(level)
-
         if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
-            if "TypeError: Property description must be an object" in message:
-                print(
-                    "[RecoverableWebEnginePage] Critical JS error detected, emitting recovery signal."
-                )
-                self.critical_js_error_detected.emit()
 
+            if "TypeError: Property description must be an object" in message:
+                self.critical_js_error_detected.emit()
         super().javaScriptConsoleMessage(level, message, line_number, source_id)
 
 
@@ -75,13 +60,15 @@ class EditorWidget(QWidget):
         self.web_view = QWebEngineView()
 
         page = RecoverableWebEnginePage(profile, self)
-        page.setBackgroundColor(
-            QColor(
-                self.theme_data.get("colors", {}).get("editor.background", "#1e1e1e")
-            )
-        )
+
+        bg_color = self.theme_data.get("colors", {}).get("editor.background", "#1e1e1e")
+        page.setBackgroundColor(QColor(bg_color))
 
         page.critical_js_error_detected.connect(self._trigger_recovery_reload)
+
+        self.web_view.renderProcessTerminated.connect(
+            self._on_render_process_terminated
+        )
 
         self.web_view.setPage(page)
         self.layout().addWidget(self.web_view)
@@ -145,6 +132,7 @@ class EditorWidget(QWidget):
 
     def enter_merge_mode(self):
         if not self.is_ready:
+            QTimer.singleShot(100, self.enter_merge_mode)
             return
         self.web_view.page().runJavaScript("enter_merge_mode();")
         self.mark_resolved_button.setVisible(True)
@@ -180,13 +168,10 @@ class EditorWidget(QWidget):
     def apply_theme(self, theme_data: dict):
         self.theme_data = theme_data
         if self.web_view.page():
-            self.web_view.page().setBackgroundColor(
-                QColor(
-                    self.theme_data.get("colors", {}).get(
-                        "editor.background", "#1e1e1e"
-                    )
-                )
+            bg_color = self.theme_data.get("colors", {}).get(
+                "editor.background", "#1e1e1e"
             )
+            self.web_view.page().setBackgroundColor(QColor(bg_color))
         if self.is_ready:
             self.web_view.page().runJavaScript(
                 f"set_theme({json.dumps(self.theme_data)});"
@@ -194,8 +179,6 @@ class EditorWidget(QWidget):
 
     @Slot()
     def _on_web_channel_ready(self):
-        """Called from JS via the bridge when the web channel is established."""
-        print("[EditorWidget] Web channel is ready. Initializing Monaco editor.")
         theme_json = json.dumps(self.theme_data)
         self.web_view.page().runJavaScript(f"initialize_editor({theme_json});")
 
@@ -222,20 +205,17 @@ class EditorWidget(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         padding = 20
-
         self.mark_resolved_button.adjustSize()
         btn_size = self.mark_resolved_button.size()
         x_btn = self.width() - btn_size.width() - padding
         y_btn = self.height() - btn_size.height() - padding
         self.mark_resolved_button.move(x_btn, y_btn)
         self.mark_resolved_button.raise_()
-
         self.merge_banner.adjustSize()
         banner_size = self.merge_banner.size()
         x_banner = self.width() - banner_size.width() - padding
         self.merge_banner.move(x_banner, padding)
         self.merge_banner.raise_()
-
         if self.is_ready:
             self.resize_timer.start()
 
@@ -248,9 +228,6 @@ class EditorWidget(QWidget):
     def _on_frontend_ready(self):
         self.is_ready = True
         if self.current_uri is not None:
-            print(
-                f"[EditorWidget] Frontend is ready. Restoring state for URI: {self.current_uri}"
-            )
             initial_callback = self.pending_callbacks.pop("initial_load", lambda: None)
             self.set_content(
                 self.current_content,
@@ -260,8 +237,6 @@ class EditorWidget(QWidget):
             )
             self.set_read_only(self.current_read_only_state)
             self.apply_theme(self.theme_data)
-        else:
-            print("[EditorWidget] Frontend is ready. No content to restore.")
 
     @Slot(str, str)
     def _on_text_received(self, callback_id, content):
@@ -312,7 +287,6 @@ class EditorWidget(QWidget):
         self.current_content = content
         self.current_lang_id = lang_id
         self.current_uri = uri
-
         if self.is_ready:
             callback_id = str(uuid.uuid4())
             self.pending_callbacks[callback_id] = callback
@@ -360,11 +334,9 @@ class EditorWidget(QWidget):
                 monaco_severity = 4
             elif lsp_severity == 3:
                 monaco_severity = 2
-
             code_val = diag.get("code")
             if code_val is not None:
                 code_val = str(code_val)
-
             markers.append(
                 {
                     "startLineNumber": start_line,
@@ -387,20 +359,19 @@ class EditorWidget(QWidget):
             f"set_semantic_tokens({json.dumps(token_data)}, '{callback_id}');"
         )
 
+    @Slot(QWebEnginePage.RenderProcessTerminationStatus, int)
+    def _on_render_process_terminated(self, status, exit_code):
+        log_msg = f"[RECOVERY] Editor render process terminated unexpectedly (Status: {status}, Exit Code: {exit_code})."
+        self.js_log_received.emit(log_msg)
+        self._trigger_recovery_reload()
+
     @Slot()
     def _trigger_recovery_reload(self):
         current_time = time.time()
         if current_time - self.last_recovery_time < 5:
-            print("[EditorWidget] Suppressing rapid recovery reload to prevent loop.")
             return
-
         self.last_recovery_time = current_time
-        log_msg = (
-            "[RECOVERY] A critical editor error occurred. "
-            "The editor has been automatically reloaded. Undo history is reset for this file."
-        )
-        print(f"[EditorWidget] {log_msg}")
+        log_msg = "[RECOVERY] A critical editor error occurred. The editor will be automatically reloaded. Undo history may be lost for this file."
         self.js_log_received.emit(log_msg)
-
         self.is_ready = False
         self.web_view.reload()
