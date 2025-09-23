@@ -55,7 +55,6 @@ _icon_cache = {}
 
 
 def _get_colorized_icon(icon_filename: str, color: QColor) -> QIcon:
-    """A generic helper to create and cache colorized icons."""
     cache_key = (icon_filename, color.name())
     if cache_key in _icon_cache:
         return _icon_cache[cache_key]
@@ -65,7 +64,7 @@ def _get_colorized_icon(icon_filename: str, color: QColor) -> QIcon:
         return QIcon()
 
     original_icon = QIcon(str(icon_path))
-    pixmap = original_icon.pixmap(QSize(16, 16))
+    pixmap = original_icon.pixmap(QSize(24, 24))
 
     painter = QPainter(pixmap)
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
@@ -79,7 +78,6 @@ def _get_colorized_icon(icon_filename: str, color: QColor) -> QIcon:
 
 
 def get_themed_icon(icon_filename: str, color_hex: str) -> Path:
-    """Creates a colorized icon file in a temp dir for QSS usage and returns its path."""
     temp_dir = Path.home() / ".forge" / "temp" / "icons"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -105,7 +103,6 @@ def get_themed_icon(icon_filename: str, color_hex: str) -> Path:
 
 
 def get_rotated_icon(icon_filename: str, color: QColor, degrees: int) -> QIcon:
-    """Creates and caches a rotated version of an icon."""
     cache_key = (icon_filename, color.name(), degrees)
     if cache_key in _icon_cache:
         return _icon_cache[cache_key]
@@ -129,7 +126,6 @@ def get_rotated_icon(icon_filename: str, color: QColor, degrees: int) -> QIcon:
 
 
 def get_icon_for_symbol(kind: int) -> QIcon:
-    """Gets a colorized QIcon for a given LSP DocumentSymbolKind."""
     meta = SYMBOL_META_DATA.get(kind, SYMBOL_META_DATA[KIND_KEYWORD])
     color = QColor(meta["color"])
     return _get_colorized_icon(meta["icon"], color)
@@ -196,6 +192,38 @@ def get_plus_icon() -> QIcon:
 
 def get_split_icon() -> QIcon:
     return _get_colorized_icon("layout.svg", QColor("#D8DEE9"))
+
+
+def get_explorer_icon(color: str = "#D8DEE9"):
+    return _get_colorized_icon("file-text.svg", QColor(color))
+
+
+def get_search_icon(color: str = "#D8DEE9"):
+    return _get_colorized_icon("search.svg", QColor(color))
+
+
+def get_git_icon(color: str = "#D8DEE9"):
+    return _get_colorized_icon("git-branch.svg", QColor(color))
+
+
+def get_debug_icon(color: str = "#D8DEE9"):
+    return _get_colorized_icon("target.svg", QColor(color))
+
+
+def get_review_icon(color: str = "#D8DEE9"):
+    return _get_colorized_icon("check-square.svg", QColor(color))
+
+
+def get_ai_icon(color: str = "#D8DEE9"):
+    return _get_colorized_icon("cpu.svg", QColor(color))
+
+
+def get_account_icon(color: str = "#D8DEE9"):
+    return _get_colorized_icon("user.svg", QColor(color))
+
+
+def get_settings_icon(color: str = "#D8DEE9"):
+    return _get_colorized_icon("settings.svg", QColor(color))
 
 
 def get_tooltip_for_symbol(kind: int) -> str:

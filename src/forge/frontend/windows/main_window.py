@@ -28,13 +28,14 @@ from ..components.panels.source_control_panel import SourceControlPanel
 from ..components.panels.problems_panel import ProblemsPanel
 from ..components.panels.outline_panel import OutlinePanel
 from ..components.panels.timeline_panel import TimelinePanel
-from ..components.panels.conflicts_panel import ConflictsPanel
+
 from ..components.panels.review_panel import ReviewPanel
 from ..components.editor.editor_widget import EditorWidget
 from ..components.editor.diff_editor_widget import DiffEditorWidget
 from ..components.terminal.terminal_widget import TerminalWidget
 from ..components.welcome.welcome_widget import WelcomeWidget
 from ..components.toolbars.review_toolbar import ReviewToolbar
+from ..components.activity_bar import ActivityBar
 from ..assets.icon_map import (
     get_stop_icon,
     get_status_icon,
@@ -47,12 +48,11 @@ from ..controllers.file_manager import FileManager
 from ..controllers.workspace_manager import WorkspaceManager
 from ..controllers.run_manager import RunManager
 from ..controllers.lsp_client import LSPClient
+from ..view_manager import ViewManager
 from .about_dialog import AboutDialog
 
 
 class ClickableStatusBarWidget(QWidget):
-    """A simple QWidget that emits a 'clicked' signal on a mouse press."""
-
     clicked = Signal()
 
     def mousePressEvent(self, event):
@@ -84,13 +84,27 @@ class MainWindow(QMainWindow):
         self._initial_layout_applied = False
         self.icon_provider = QFileIconProvider()
 
-        self.theme_manager = ThemeManager(self)
+        main_container = QWidget()
+        self.main_layout = QHBoxLayout(main_container)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+        self.setCentralWidget(main_container)
 
+        self.activity_bar = ActivityBar(self)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.activity_bar)
+
+        self.theme_manager = ThemeManager(self)
         self.workspace_manager = WorkspaceManager(self, self.app_root)
+
         self._create_central_widget(self.workspace_manager.recent_projects)
         self._create_docks()
         self._create_menu_bar()
         self._create_status_bar()
+
+        self.main_layout.addWidget(self.central_stack)
+
+        self.view_manager = ViewManager(self)
+        self.activity_bar.view_selected.connect(self.view_manager.set_view)
 
         self.file_manager = FileManager(self, self.theme_manager)
         self.run_manager = RunManager(self, self.file_manager)
@@ -113,8 +127,7 @@ class MainWindow(QMainWindow):
             self.controller.git_controller.exit_merge_mode
         )
 
-        self.file_explorer_dock.raise_()
-        self.terminal_dock.raise_()
+        self.view_manager.set_view("Explorer")
         self._preload_web_engine()
 
         self.theme_manager.set_theme(self.theme_manager.current_theme_name)
@@ -233,8 +246,9 @@ class MainWindow(QMainWindow):
         self.central_stack = QStackedWidget()
         self.central_stack.addWidget(self.welcome_screen)
         self.central_stack.addWidget(self.tab_widget)
-        self.setCentralWidget(self.central_stack)
-        self.central_stack.setCurrentWidget(self.welcome_screen)
+        self.central_stack.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
 
     def _create_tab_widget(self):
         tab_widget = QTabWidget()
@@ -344,29 +358,28 @@ class MainWindow(QMainWindow):
             self.icon_provider, self.source_control_dock
         )
         self.source_control_dock.setWidget(self.source_control_panel)
-        self.tabifyDockWidget(self.file_explorer_dock, self.source_control_dock)
-
-        self.conflicts_panel = ConflictsPanel(self.icon_provider, self)
-        self.conflicts_dock = QDockWidget("Conflicts", self)
-        self.conflicts_dock.setWidget(self.conflicts_panel)
-        self.conflicts_dock.setVisible(False)
-        self.tabifyDockWidget(self.file_explorer_dock, self.conflicts_dock)
+        self.addDockWidget(
+            Qt.DockWidgetArea.LeftDockWidgetArea, self.source_control_dock
+        )
 
         self.outline_panel = OutlinePanel(self)
         self.outline_dock = QDockWidget("Outline", self)
         self.outline_dock.setWidget(self.outline_panel)
-        self.tabifyDockWidget(self.file_explorer_dock, self.outline_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.outline_dock)
 
         self.timeline_panel = TimelinePanel(self)
         self.timeline_dock = QDockWidget("Timeline", self)
         self.timeline_dock.setWidget(self.timeline_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.timeline_dock)
+
+        self.tabifyDockWidget(self.file_explorer_dock, self.outline_dock)
         self.tabifyDockWidget(self.file_explorer_dock, self.timeline_dock)
 
         self.review_panel = ReviewPanel(self.icon_provider, self)
         self.review_dock = QDockWidget("Review", self)
         self.review_dock.setWidget(self.review_panel)
         self.review_dock.setVisible(False)
-        self.tabifyDockWidget(self.file_explorer_dock, self.review_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.review_dock)
 
         self.terminal = TerminalWidget(self)
         self.terminal_dock = QDockWidget("Terminal", self)
@@ -478,11 +491,6 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.file_explorer_dock.toggleViewAction())
         view_menu.addAction(self.source_control_dock.toggleViewAction())
 
-        self.conflicts_action = self.conflicts_dock.toggleViewAction()
-        self.conflicts_action.setText("Conflicts")
-        self.conflicts_action.setEnabled(False)
-        view_menu.addAction(self.conflicts_action)
-
         self.review_action = self.review_dock.toggleViewAction()
         self.review_action.setText("Review")
         self.review_action.setEnabled(False)
@@ -507,14 +515,12 @@ class MainWindow(QMainWindow):
 
     def _create_help_menu(self, menu_bar):
         help_menu = menu_bar.addMenu("&Help")
-
         about_action = QAction("&About Forge", self)
         about_action.triggered.connect(self.on_about)
         help_menu.addAction(about_action)
 
     @Slot()
     def on_about(self):
-        """Shows the About dialog."""
         dialog = AboutDialog(Path(self.app_root), self)
         dialog.exec()
 
@@ -568,34 +574,13 @@ class MainWindow(QMainWindow):
         self.debug_console_widget.append(message)
 
     def enter_merge_mode(self):
-        self.conflicts_dock.setVisible(True)
-        self.outline_dock.setVisible(True)
-        self.file_explorer_dock.setVisible(False)
-        self.timeline_dock.setVisible(False)
-        self.conflicts_action.setEnabled(True)
-        self.conflicts_dock.raise_()
-        self.source_control_dock.raise_()
+        self.view_manager.set_view("Source Control")
 
     def exit_merge_mode(self):
-        self.conflicts_dock.setVisible(False)
-        self.file_explorer_dock.setVisible(True)
-        self.timeline_dock.setVisible(True)
-        self.conflicts_action.setEnabled(False)
-        self.file_explorer_dock.raise_()
+        self.view_manager.set_view("Explorer")
 
     def enter_review_mode(self):
-        self.review_action.setEnabled(True)
-        self.file_explorer_dock.setVisible(False)
-        self.source_control_dock.setVisible(False)
-        self.timeline_dock.setVisible(False)
-        self.debug_console_dock.setVisible(False)
-        self.review_dock.setVisible(True)
-        self.review_dock.raise_()
+        self.view_manager.set_view("Review")
 
     def exit_review_mode(self):
-        self.review_action.setEnabled(False)
-        self.review_dock.setVisible(False)
-        self.file_explorer_dock.setVisible(True)
-        self.source_control_dock.setVisible(True)
-        self.timeline_dock.setVisible(True)
-        self.file_explorer_dock.raise_()
+        self.view_manager.set_view("Explorer")

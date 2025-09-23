@@ -123,9 +123,6 @@ class MainController(QObject):
         self.main_window.source_control_panel.discard_changes_requested.connect(
             self.on_discard_changes_requested
         )
-        self.main_window.conflicts_panel.file_selected.connect(
-            self.git_controller.on_conflict_file_selected
-        )
 
         self.workspace_manager.workspace_changed.connect(self.on_workspace_changed)
         self.workspace_manager.lsp_manager_created.connect(
@@ -376,6 +373,7 @@ class MainController(QObject):
             self.git_controller.on_clone_repo_requested()
 
     def _get_current_timeline_file(self):
+        """Helper to get the file path associated with the current timeline view."""
         return self.main_window.timeline_panel.current_file_path
 
     @Slot(dict)

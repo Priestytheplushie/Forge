@@ -62,18 +62,28 @@ class ThemeManager(QObject):
         colors = theme_data.get("colors", {})
 
         bg = colors.get("editor.background", "#282c34")
-        base = colors.get("sideBar.background", self._adjust_color(bg, 1.1))
         fg = colors.get("editor.foreground", "#abb2bf")
+
+        base = colors.get("sideBar.background", self._adjust_color(bg, 1.1))
         border = colors.get("sideBar.border", self._adjust_color(base, 1.2))
+        activity_bar_bg = colors.get(
+            "activityBar.background", self._adjust_color(base, 0.95)
+        )
+
         highlight = colors.get("list.activeSelectionBackground", "#3e4451")
         highlight_fg = colors.get("list.activeSelectionForeground", "#ffffff")
         inactive_highlight = colors.get("list.inactiveSelectionBackground", "#3a3f4b")
         inactive_fg = colors.get("list.inactiveSelectionForeground", "#d8deee")
 
+        close_icon_path = get_themed_icon("x.svg", fg).as_posix()
+
         stylesheet = f"""
             QMainWindow, QDialog, QFrame {{
                 background-color: {base};
                 color: {fg};
+            }}
+            #ActivityBar {{
+                background-color: {activity_bar_bg};
             }}
             QMainWindow::separator {{
                 background-color: {border};
