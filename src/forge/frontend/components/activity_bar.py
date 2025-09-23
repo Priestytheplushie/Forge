@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QToolBar, QWidget, QVBoxLayout, QToolButton, QSizePolicy
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtCore import Qt, Signal, QSize, Slot
+
 from ..assets.icon_map import (
     get_explorer_icon,
     get_search_icon,
@@ -36,7 +37,6 @@ class ActivityBar(QToolBar):
         self.add_action("AI", get_ai_icon())
 
         spacer = QWidget()
-
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.addWidget(spacer)
 
@@ -56,3 +56,9 @@ class ActivityBar(QToolBar):
     @Slot(QAction)
     def _on_action_triggered(self, action: QAction):
         self.view_selected.emit(action.data())
+
+    def set_modal(self, view_name: str, is_modal: bool):
+        """Disables or enables all actions except the one for the specified view."""
+        for action in self.action_group.actions():
+            if action.data() != view_name:
+                action.setEnabled(not is_modal)

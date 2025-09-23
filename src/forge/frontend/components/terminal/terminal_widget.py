@@ -103,6 +103,12 @@ class TerminalWidget(QWidget):
 
         return instance
 
+    def force_resize_current_terminal(self):
+        """Forces the currently visible terminal instance to resize its pty."""
+        current_instance = self.terminal_stack.currentWidget()
+        if isinstance(current_instance, TerminalInstance):
+            current_instance.force_resize()
+
     @Slot(QListWidgetItem, QListWidgetItem)
     def on_terminal_selection_changed(self, current, previous):
         if current:

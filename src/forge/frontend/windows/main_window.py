@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QTabBar,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, QFileInfo, Slot, Signal
+from PySide6.QtCore import Qt, QFileInfo, Slot, Signal, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QActionGroup
 import os
 from pathlib import Path
@@ -28,7 +28,6 @@ from ..components.panels.source_control_panel import SourceControlPanel
 from ..components.panels.problems_panel import ProblemsPanel
 from ..components.panels.outline_panel import OutlinePanel
 from ..components.panels.timeline_panel import TimelinePanel
-
 from ..components.panels.review_panel import ReviewPanel
 from ..components.editor.editor_widget import EditorWidget
 from ..components.editor.diff_editor_widget import DiffEditorWidget
@@ -50,6 +49,11 @@ from ..controllers.run_manager import RunManager
 from ..controllers.lsp_client import LSPClient
 from ..view_manager import ViewManager
 from .about_dialog import AboutDialog
+from .new_project_dialog import NewProjectDialog
+from ..placeholders.search_placeholder import SearchPlaceholder
+from ..placeholders.debug_placeholder import DebugPlaceholder
+from ..placeholders.review_placeholder import ReviewPlaceholder
+from ..placeholders.generic_placeholder import GenericPlaceholder
 
 
 class ClickableStatusBarWidget(QWidget):
@@ -68,10 +72,12 @@ class WelcomeFileExplorer(QWidget):
         layout.setContentsMargins(10, 20, 10, 10)
         self.open_folder_button = QPushButton("Open Folder")
         self.clone_repo_button = QPushButton("Clone Repository")
+        self.new_project_button = QPushButton("New Project...")
         layout.addWidget(QLabel("You have not yet opened a folder."))
         layout.addSpacing(10)
         layout.addWidget(self.open_folder_button)
         layout.addWidget(self.clone_repo_button)
+        layout.addWidget(self.new_project_button)
 
 
 class MainWindow(QMainWindow):
@@ -84,12 +90,6 @@ class MainWindow(QMainWindow):
         self._initial_layout_applied = False
         self.icon_provider = QFileIconProvider()
 
-        main_container = QWidget()
-        self.main_layout = QHBoxLayout(main_container)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(0)
-        self.setCentralWidget(main_container)
-
         self.activity_bar = ActivityBar(self)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.activity_bar)
 
@@ -100,8 +100,6 @@ class MainWindow(QMainWindow):
         self._create_docks()
         self._create_menu_bar()
         self._create_status_bar()
-
-        self.main_layout.addWidget(self.central_stack)
 
         self.view_manager = ViewManager(self)
         self.activity_bar.view_selected.connect(self.view_manager.set_view)
@@ -132,6 +130,13 @@ class MainWindow(QMainWindow):
 
         self.theme_manager.set_theme(self.theme_manager.current_theme_name)
 
+        self.welcome_file_explorer.new_project_button.clicked.connect(
+            self.on_new_project
+        )
+        self.welcome_screen.new_project_button.clicked.connect(self.on_new_project)
+
+        self.set_bottom_panel_enabled(False)
+
     def closeEvent(self, event: QCloseEvent):
         self.controller.shutdown()
         self.terminal.shutdown_all()
@@ -159,7 +164,6 @@ class MainWindow(QMainWindow):
         self.git_remote_status_label = QLabel()
         self.git_remote_status_label.setToolTip("Commits ahead/behind remote branch")
         git_layout.addWidget(self.git_remote_status_label)
-
         self.commit_info_widget = QWidget()
         commit_layout = QHBoxLayout(self.commit_info_widget)
         commit_layout.setContentsMargins(5, 0, 5, 0)
@@ -170,24 +174,18 @@ class MainWindow(QMainWindow):
         self.commit_info_label.setToolTip("Latest commit details")
         commit_layout.addWidget(self.commit_icon_label)
         commit_layout.addWidget(self.commit_info_label)
-
         self.status_bar.addWidget(self.git_branch_widget)
         self.status_bar.addWidget(self.commit_info_widget)
-
         self.git_branch_widget.setVisible(False)
         self.commit_info_widget.setVisible(False)
-
         right_widget = QWidget()
         right_layout = QHBoxLayout(right_widget)
         right_layout.setContentsMargins(5, 0, 5, 0)
         right_layout.setSpacing(10)
-
         self.autosave_status_label = QLabel("Autosave Enabled")
         right_layout.addWidget(self.autosave_status_label)
-
         self.cursor_pos_label = QLabel("Ln 1, Col 1")
         right_layout.addWidget(self.cursor_pos_label)
-
         problems_widget = QWidget()
         problems_layout = QHBoxLayout(problems_widget)
         problems_layout.setContentsMargins(0, 0, 0, 0)
@@ -216,15 +214,12 @@ class MainWindow(QMainWindow):
         problems_layout.addWidget(self.hint_icon_label)
         problems_layout.addWidget(self.hint_label)
         right_layout.addWidget(problems_widget)
-
         self.lsp_status_label = QLabel("LSP: Idle")
         self.lsp_status_label.setPixmap(get_status_icon("cpu").pixmap(16, 16))
         right_layout.addWidget(self.lsp_status_label)
-
         self.ai_status_label = QLabel("AI: Disabled")
         self.ai_status_label.setPixmap(get_status_icon("pen-tool").pixmap(16, 16))
         right_layout.addWidget(self.ai_status_label)
-
         self.status_bar.addPermanentWidget(right_widget)
 
     def showEvent(self, event):
@@ -234,6 +229,7 @@ class MainWindow(QMainWindow):
             self._initial_layout_applied = True
 
     def _preload_web_engine(self):
+
         self._preloaded_editor = EditorWidget(
             self.theme_manager.get_current_theme_data(), self
         )
@@ -241,6 +237,7 @@ class MainWindow(QMainWindow):
         self._preloaded_editor.setVisible(False)
 
     def _create_central_widget(self, recent_projects: list):
+
         self.welcome_screen = WelcomeWidget(recent_projects, self)
         self.tab_widget = self._create_tab_widget()
         self.central_stack = QStackedWidget()
@@ -249,19 +246,18 @@ class MainWindow(QMainWindow):
         self.central_stack.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
+        self.setCentralWidget(self.central_stack)
 
     def _create_tab_widget(self):
+
         tab_widget = QTabWidget()
         tab_widget.setTabsClosable(True)
         tab_widget.setMovable(True)
-
         self.corner_stack = QStackedWidget()
-
         self.normal_corner_widget = QWidget()
         normal_layout = QHBoxLayout(self.normal_corner_widget)
         normal_layout.setContentsMargins(5, 0, 5, 0)
         normal_layout.setSpacing(5)
-
         self.prev_item_button = QToolButton()
         self.prev_item_button.setIcon(get_arrow_up_icon())
         self.prev_item_button.setVisible(False)
@@ -271,22 +267,18 @@ class MainWindow(QMainWindow):
         self.run_button = QToolButton()
         self.run_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.run_button.setToolTip("Run File")
-
         normal_layout.addWidget(self.prev_item_button)
         normal_layout.addWidget(self.next_item_button)
         normal_layout.addStretch()
         normal_layout.addWidget(self.run_button)
-
         self.review_toolbar = ReviewToolbar()
-
         self.corner_stack.addWidget(self.normal_corner_widget)
         self.corner_stack.addWidget(self.review_toolbar)
-
         tab_widget.setCornerWidget(self.corner_stack, Qt.Corner.TopRightCorner)
-
         return tab_widget
 
     def add_editor_tab(self, file_path, widget):
+
         self.show_editor_view()
         is_diff = isinstance(widget, DiffEditorWidget)
         is_merge_editor = bool(widget.property("is_merge_editor"))
@@ -294,7 +286,6 @@ class MainWindow(QMainWindow):
             "is_history_view", False
         )
         is_review_diff = getattr(widget, "is_review_diff", False)
-
         if is_review_diff:
             tab_title = f"Review: {os.path.basename(file_path)}"
         elif is_merge_editor:
@@ -303,7 +294,6 @@ class MainWindow(QMainWindow):
             tab_title = file_path
         else:
             tab_title = os.path.basename(file_path)
-
         widget.setProperty("file_path", file_path)
         icon_path = (
             widget.metadata.get("original_path", file_path)
@@ -312,23 +302,23 @@ class MainWindow(QMainWindow):
         )
         file_info = QFileInfo(icon_path)
         icon = self.icon_provider.icon(file_info)
-
         index = self.tab_widget.addTab(widget, icon, tab_title)
         self.tab_widget.setCurrentIndex(index)
         self.controller._update_ui_for_editor(widget)
 
     def get_current_editor(self):
+
         if self.central_stack.currentWidget() is self.tab_widget:
             return self.tab_widget.currentWidget()
         return None
 
     def _create_docks(self):
+        self.file_explorer_dock = QDockWidget("File Explorer", self)
         self.file_explorer = FileExplorer(self)
         self.welcome_file_explorer = WelcomeFileExplorer(self)
         self.file_explorer_stack = QStackedWidget()
         self.file_explorer_stack.addWidget(self.welcome_file_explorer)
         self.file_explorer_stack.addWidget(self.file_explorer)
-        self.file_explorer_dock = QDockWidget("File Explorer", self)
         self.file_explorer_dock.setWidget(self.file_explorer_stack)
         self.addDockWidget(
             Qt.DockWidgetArea.LeftDockWidgetArea, self.file_explorer_dock
@@ -353,7 +343,6 @@ class MainWindow(QMainWindow):
         sc_title_layout.addWidget(self.git_push_button)
         sc_title_layout.addWidget(self.git_refresh_button)
         self.source_control_dock.setTitleBarWidget(sc_title_bar)
-
         self.source_control_panel = SourceControlPanel(
             self.icon_provider, self.source_control_dock
         )
@@ -362,31 +351,74 @@ class MainWindow(QMainWindow):
             Qt.DockWidgetArea.LeftDockWidgetArea, self.source_control_dock
         )
 
-        self.outline_panel = OutlinePanel(self)
         self.outline_dock = QDockWidget("Outline", self)
+        self.outline_panel = OutlinePanel(self)
         self.outline_dock.setWidget(self.outline_panel)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.outline_dock)
 
-        self.timeline_panel = TimelinePanel(self)
         self.timeline_dock = QDockWidget("Timeline", self)
+        self.timeline_panel = TimelinePanel(self)
         self.timeline_dock.setWidget(self.timeline_panel)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.timeline_dock)
 
-        self.tabifyDockWidget(self.file_explorer_dock, self.outline_dock)
-        self.tabifyDockWidget(self.file_explorer_dock, self.timeline_dock)
-
-        self.review_panel = ReviewPanel(self.icon_provider, self)
         self.review_dock = QDockWidget("Review", self)
-        self.review_dock.setWidget(self.review_panel)
-        self.review_dock.setVisible(False)
+        self.review_panel = ReviewPanel(self.icon_provider, self)
+        self.review_placeholder = ReviewPlaceholder(self)
+        self.review_stack = QStackedWidget()
+        self.review_stack.addWidget(self.review_placeholder)
+        self.review_stack.addWidget(self.review_panel)
+        self.review_dock.setWidget(self.review_stack)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.review_dock)
 
-        self.terminal = TerminalWidget(self)
+        self.search_placeholder_dock = QDockWidget("Search", self)
+        self.search_placeholder_dock.setWidget(SearchPlaceholder(self))
+        self.addDockWidget(
+            Qt.DockWidgetArea.LeftDockWidgetArea, self.search_placeholder_dock
+        )
+
+        self.debug_placeholder_dock = QDockWidget("Debug", self)
+        self.debug_placeholder_dock.setWidget(DebugPlaceholder(self))
+        self.addDockWidget(
+            Qt.DockWidgetArea.LeftDockWidgetArea, self.debug_placeholder_dock
+        )
+
+        self.ai_placeholder_dock = QDockWidget("AI", self)
+        self.ai_placeholder_dock.setWidget(GenericPlaceholder("AI", self))
+        self.addDockWidget(
+            Qt.DockWidgetArea.LeftDockWidgetArea, self.ai_placeholder_dock
+        )
+
+        self.account_placeholder_dock = QDockWidget("Account", self)
+        self.account_placeholder_dock.setWidget(GenericPlaceholder("Account", self))
+        self.addDockWidget(
+            Qt.DockWidgetArea.LeftDockWidgetArea, self.account_placeholder_dock
+        )
+
+        self.settings_placeholder_dock = QDockWidget("Settings", self)
+        self.settings_placeholder_dock.setWidget(GenericPlaceholder("Settings", self))
+        self.addDockWidget(
+            Qt.DockWidgetArea.LeftDockWidgetArea, self.settings_placeholder_dock
+        )
+
+        self.tabifyDockWidget(self.file_explorer_dock, self.source_control_dock)
+        self.tabifyDockWidget(self.source_control_dock, self.outline_dock)
+        self.tabifyDockWidget(self.outline_dock, self.timeline_dock)
+        self.tabifyDockWidget(self.timeline_dock, self.review_dock)
+        self.tabifyDockWidget(self.review_dock, self.search_placeholder_dock)
+        self.tabifyDockWidget(self.search_placeholder_dock, self.debug_placeholder_dock)
+        self.tabifyDockWidget(self.debug_placeholder_dock, self.ai_placeholder_dock)
+        self.tabifyDockWidget(self.ai_placeholder_dock, self.account_placeholder_dock)
+        self.tabifyDockWidget(
+            self.account_placeholder_dock, self.settings_placeholder_dock
+        )
+
         self.terminal_dock = QDockWidget("Terminal", self)
+        self.terminal = TerminalWidget(self)
         self.terminal_dock.setWidget(self.terminal)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal_dock)
 
         self.output_dock = QDockWidget("Output", self)
+
         self.output_channels = {}
         self.output_stack = QStackedWidget()
         output_panel_widget = QWidget()
@@ -421,20 +453,29 @@ class MainWindow(QMainWindow):
             self.output_stack.setCurrentIndex
         )
         self.clear_output_button.clicked.connect(self.on_clear_output)
-        self.tabifyDockWidget(self.terminal_dock, self.output_dock)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
 
-        self.problems_panel = ProblemsPanel(self.icon_provider, self)
         self.problems_dock = QDockWidget("Problems", self)
+        self.problems_panel = ProblemsPanel(self.icon_provider, self)
         self.problems_dock.setWidget(self.problems_panel)
-        self.tabifyDockWidget(self.terminal_dock, self.problems_dock)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.problems_dock)
 
+        self.debug_console_dock = QDockWidget("Debug Console", self)
         self.debug_console_widget = QTextEdit()
         self.debug_console_widget.setReadOnly(True)
-        self.debug_console_dock = QDockWidget("Debug Console", self)
         self.debug_console_dock.setWidget(self.debug_console_widget)
-        self.tabifyDockWidget(self.terminal_dock, self.debug_console_dock)
+        self.addDockWidget(
+            Qt.DockWidgetArea.BottomDockWidgetArea, self.debug_console_dock
+        )
+
+        self.tabifyDockWidget(self.terminal_dock, self.output_dock)
+        self.tabifyDockWidget(self.output_dock, self.problems_dock)
+        self.tabifyDockWidget(self.problems_dock, self.debug_console_dock)
+
+        self.terminal_dock.raise_()
 
     def _create_menu_bar(self):
+
         menu_bar = QMenuBar(self)
         self.setMenuBar(menu_bar)
         self._create_file_menu(menu_bar)
@@ -448,6 +489,10 @@ class MainWindow(QMainWindow):
 
     def _create_file_menu(self, menu_bar):
         self.file_menu = menu_bar.addMenu("&File")
+        new_project_action = QAction("New Project...", self)
+        new_project_action.triggered.connect(self.on_new_project)
+        self.file_menu.addAction(new_project_action)
+        self.file_menu.addSeparator()
         self.file_menu.addAction(QAction("New File", self))
         self.file_menu.addAction(QAction("Open &Folder...", self, shortcut="Ctrl+K"))
         self.file_menu.addAction(QAction("&Open...", self, shortcut=QKeySequence.Open))
@@ -461,6 +506,7 @@ class MainWindow(QMainWindow):
         )
 
     def _create_edit_menu(self, menu_bar):
+
         self.edit_menu = menu_bar.addMenu("&Edit")
         self.edit_menu.addAction(QAction("&Undo", self, shortcut=QKeySequence.Undo))
         self.edit_menu.addAction(QAction("&Redo", self, shortcut=QKeySequence.Redo))
@@ -470,6 +516,7 @@ class MainWindow(QMainWindow):
         self.edit_menu.addAction(QAction("&Paste", self, shortcut=QKeySequence.Paste))
 
     def _create_view_menu(self, menu_bar):
+
         view_menu = menu_bar.addMenu("&View")
         appearance_menu = QMenu("Appearance", self)
         view_menu.addMenu(appearance_menu)
@@ -488,14 +535,13 @@ class MainWindow(QMainWindow):
             theme_menu.addAction(action)
         appearance_menu.addSeparator()
         view_menu.addSeparator()
+
         view_menu.addAction(self.file_explorer_dock.toggleViewAction())
         view_menu.addAction(self.source_control_dock.toggleViewAction())
-
         self.review_action = self.review_dock.toggleViewAction()
         self.review_action.setText("Review")
         self.review_action.setEnabled(False)
         view_menu.addAction(self.review_action)
-
         view_menu.addAction(self.outline_dock.toggleViewAction())
         view_menu.addAction(self.timeline_dock.toggleViewAction())
         view_menu.addSeparator()
@@ -505,15 +551,18 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.debug_console_dock.toggleViewAction())
 
     def _create_go_menu(self, menu_bar):
+
         self.go_menu = menu_bar.addMenu("&Go")
 
     def _create_terminal_menu(self, menu_bar):
+
         terminal_menu = menu_bar.addMenu("&Terminal")
         new_terminal_action = QAction("New Terminal", self, shortcut="Ctrl+Shift+`")
         new_terminal_action.triggered.connect(self.terminal.create_new_terminal)
         terminal_menu.addAction(new_terminal_action)
 
     def _create_help_menu(self, menu_bar):
+
         help_menu = menu_bar.addMenu("&Help")
         about_action = QAction("&About Forge", self)
         about_action.triggered.connect(self.on_about)
@@ -521,19 +570,39 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def on_about(self):
+
         dialog = AboutDialog(Path(self.app_root), self)
         dialog.exec()
 
+    @Slot()
+    def on_new_project(self):
+
+        dialog = NewProjectDialog(self.controller, self)
+        if dialog.exec():
+            self.workspace_manager.set_workspace(dialog.project_path)
+
+    @Slot(str)
+    def on_view_selected(self, view_name: str):
+        self.view_manager.set_view(view_name)
+        self.terminal.force_resize_current_terminal()
+
     def show_editor_view(self):
+
         if self.central_stack.currentWidget() is not self.tab_widget:
             self.central_stack.setCurrentWidget(self.tab_widget)
 
     def apply_workspace_layout(self):
+
         window_height = self.height()
         terminal_height = int(window_height * 0.3)
         self.resizeDocks(
             [self.terminal_dock], [terminal_height], Qt.Orientation.Vertical
         )
+
+    @Slot()
+    def on_initial_resize(self):
+        """Forces the terminal to resize after the main window is shown."""
+        self.terminal.force_resize_current_terminal()
 
     def log_to_output(
         self,
@@ -542,6 +611,7 @@ class MainWindow(QMainWindow):
         clear: bool = False,
         raise_panel: bool = False,
     ):
+
         if channel_name not in self.output_channels:
             new_output = QTextEdit()
             new_output.setReadOnly(True)
@@ -565,22 +635,52 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def on_clear_output(self):
+
         current_widget = self.output_stack.currentWidget()
         if isinstance(current_widget, QTextEdit):
             current_widget.clear()
 
     @Slot(str)
     def add_debug_log(self, message: str):
+
         self.debug_console_widget.append(message)
 
     def enter_merge_mode(self):
         self.view_manager.set_view("Source Control")
+        self.activity_bar.set_modal("Source Control", True)
+        self.terminal.force_resize_current_terminal()
 
     def exit_merge_mode(self):
-        self.view_manager.set_view("Explorer")
+        self.activity_bar.set_modal("Source Control", False)
+        if self.view_manager.current_view == "Source Control":
+            self.view_manager.set_view("Explorer")
+        self.terminal.force_resize_current_terminal()
 
     def enter_review_mode(self):
+        self.review_stack.setCurrentIndex(1)
         self.view_manager.set_view("Review")
+        self.activity_bar.set_modal("Review", True)
+        self.terminal.force_resize_current_terminal()
 
     def exit_review_mode(self):
-        self.view_manager.set_view("Explorer")
+        self.review_stack.setCurrentIndex(0)
+        self.activity_bar.set_modal("Review", False)
+        if self.view_manager.current_view == "Review":
+            self.view_manager.set_view("Explorer")
+        self.terminal.force_resize_current_terminal()
+
+    def set_bottom_panel_enabled(self, enabled: bool):
+        """Enables or disables all bottom tabs except the terminal."""
+
+        for tab_bar in self.findChildren(QTabBar):
+
+            has_terminal = False
+            for i in range(tab_bar.count()):
+                if tab_bar.tabText(i) == "Terminal":
+                    has_terminal = True
+                    break
+            if has_terminal:
+                for i in range(tab_bar.count()):
+                    if tab_bar.tabText(i) != "Terminal":
+                        tab_bar.setTabEnabled(i, enabled)
+                break

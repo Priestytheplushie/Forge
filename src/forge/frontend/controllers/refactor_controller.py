@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QMenu,
 )
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QCursor
 from pathlib import Path
 import os
 from collections import defaultdict
@@ -73,6 +73,9 @@ class RefactorController(QObject):
 
         self.main_window.review_toolbar.finish_review_requested.connect(
             self.on_finish_review
+        )
+        self.main_window.review_placeholder.refactor_button.clicked.connect(
+            lambda: self.main_window.refactor_menu.exec(QCursor.pos())
         )
 
     def _setup_dynamic_menus(self):
@@ -403,6 +406,11 @@ class RefactorController(QObject):
 
     @Slot()
     def on_accept_all_review_changes(self):
+
+        if not self.review_session_data or "changes" not in self.review_session_data:
+            self.exit_review_mode()
+            return
+
         for file_path, change_data in list(self.review_session_data["changes"].items()):
             self.refactor_manager.accept_changes(change_data)
         QMessageBox.information(

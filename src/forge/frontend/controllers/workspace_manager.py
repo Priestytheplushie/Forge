@@ -1,5 +1,7 @@
 import os
 import json
+import sys
+import ctypes
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from PySide6.QtCore import QObject, Slot, Signal
 from pathlib import Path
@@ -38,7 +40,19 @@ class WorkspaceManager(QObject):
 
     def _save_recent_projects(self):
         try:
-            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            forge_dir = self.settings_path.parent
+            forge_dir.mkdir(parents=True, exist_ok=True)
+
+            if sys.platform == "win32":
+                try:
+                    attrs = ctypes.windll.kernel32.GetFileAttributesW(str(forge_dir))
+                    if not attrs & 2:
+                        ctypes.windll.kernel32.SetFileAttributesW(
+                            str(forge_dir), attrs | 2
+                        )
+                except Exception:
+                    pass
+
             with open(self.settings_path, "w") as f:
                 json.dump({"recent_projects": self.recent_projects}, f, indent=2)
         except IOError:
@@ -98,3 +112,9 @@ class WorkspaceManager(QObject):
     def shutdown_lsp(self):
         if self.lsp_manager:
             self.lsp_manager.shutdown()
+
+    @Slot()
+    def clear_recent_projects(self):
+        self.recent_projects.clear()
+        self._save_recent_projects()
+        self.main_window.welcome_screen.update_recent_list(self.recent_projects)

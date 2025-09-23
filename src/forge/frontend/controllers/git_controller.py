@@ -101,7 +101,7 @@ class GitController(QObject):
             return
         self.is_in_merge_conflict = True
         self.main_window.enter_merge_mode()
-        self.main_window.conflicts_panel.update_conflicts(conflicted_files)
+
         self.main_window.source_control_panel.enter_merge_mode(conflicted_files)
 
     def exit_merge_mode(self):
@@ -114,18 +114,11 @@ class GitController(QObject):
 
     @Slot(str, str)
     def on_git_file_selected(self, file_path: str, status: str):
-
         full_path = str(Path(self.workspace_manager.workspace_path) / file_path)
         if self.is_in_merge_conflict and status == "U":
             self.file_manager.open_file_for_merge(full_path)
         else:
             self.file_manager.open_diff_viewer(full_path, status)
-
-    @Slot(str)
-    def on_conflict_file_selected(self, file_path: str):
-
-        full_path = str(Path(self.workspace_manager.workspace_path) / file_path)
-        self.file_manager.open_file_for_merge(full_path)
 
     @Slot(EditorWidget)
     def on_mark_as_resolved(self, editor: EditorWidget):

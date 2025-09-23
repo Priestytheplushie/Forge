@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtCore import QUrl, Slot, Signal
+from PySide6.QtCore import QUrl, Slot, Signal, QTimer
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtGui import QColor
 from pathlib import Path
@@ -22,6 +22,11 @@ class TerminalInstance(QWidget):
         self._pending_workspace_path = None
         self.display_name = "shell"
         self._command_queue = []
+
+        self.resize_timer = QTimer(self)
+        self.resize_timer.setSingleShot(True)
+        self.resize_timer.setInterval(50)
+        self.resize_timer.timeout.connect(self._on_resize_timeout)
 
         self.backend = TerminalBackend(self)
         self.setLayout(QVBoxLayout())
@@ -59,11 +64,15 @@ class TerminalInstance(QWidget):
             self.web_view.page().runJavaScript("request_initial_size();")
 
     def send_command(self, command: str):
-        """Queues a command to be sent to the terminal, ensuring it's sent only after the backend is ready."""
         if self.is_backend_started:
             self.backend.write_to_pty(command)
         else:
             self._command_queue.append(command)
+
+    def force_resize(self):
+        """Public method to trigger a delayed resize of the JS terminal."""
+        if self.is_frontend_ready:
+            self.resize_timer.start()
 
     def shutdown(self):
         self.backend.close()
@@ -111,7 +120,12 @@ class TerminalInstance(QWidget):
             )
             self.web_view.page().runJavaScript(f"write_to_terminal(`{escaped_data}`);")
 
+    @Slot()
+    def _on_resize_timeout(self):
+        """Called by the timer to execute the actual resize in JS."""
+        self.web_view.page().runJavaScript("resize_terminal();")
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.is_frontend_ready and self.is_backend_started:
-            self.web_view.page().runJavaScript("resize_terminal()")
+            self.force_resize()

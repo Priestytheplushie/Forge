@@ -108,7 +108,7 @@ class MainController(QObject):
         )
         self.git_manager.clone_finished.connect(self.git_controller.on_clone_finished)
         self.git_manager.git_command_output.connect(
-            lambda msg: self.main_window.log_to_output("Git", msg)
+            lambda msg: self.main_window.log_to_output("Git", msg, raise_panel=True)
         )
         self.git_manager.upstream_branch_not_found.connect(
             self.git_controller.on_upstream_branch_not_found
@@ -139,17 +139,23 @@ class MainController(QObject):
         self.main_window.welcome_screen.open_recent_requested.connect(
             self.workspace_manager.set_workspace
         )
-        self.main_window.file_menu.actions()[1].triggered.connect(
-            self.workspace_manager.open_workspace_dialog
+        self.main_window.tab_widget.currentChanged.connect(self.on_tab_changed)
+        self.main_window.welcome_file_explorer.clone_repo_button.clicked.connect(
+            self.git_controller.on_clone_repo_requested
         )
         self.main_window.welcome_file_explorer.open_folder_button.clicked.connect(
             self.workspace_manager.open_workspace_dialog
         )
-        self.main_window.welcome_file_explorer.clone_repo_button.clicked.connect(
-            self.git_controller.on_clone_repo_requested
-        )
 
-        self.main_window.tab_widget.currentChanged.connect(self.on_tab_changed)
+        file_menu = self.main_window.file_menu
+        file_menu.actions()[0].triggered.connect(self.main_window.on_new_project)
+        file_menu.actions()[2].triggered.connect(self.file_manager.handle_new_file)
+        file_menu.actions()[3].triggered.connect(
+            self.workspace_manager.open_workspace_dialog
+        )
+        file_menu.actions()[4].triggered.connect(self.file_manager.open_file_dialog)
+        file_menu.actions()[5].triggered.connect(self.file_manager.save_file)
+        file_menu.actions()[6].triggered.connect(self.file_manager.save_file_as)
 
         self.theme_manager.theme_changed.connect(self.on_theme_changed)
 
@@ -171,6 +177,8 @@ class MainController(QObject):
         )
 
     def on_workspace_changed(self, path: str):
+
+        self.main_window.set_bottom_panel_enabled(True)
         self.git_controller.exit_merge_mode()
         self.file_manager.set_workspace_path(path)
         self.run_manager.set_workspace_path(path)
@@ -179,6 +187,7 @@ class MainController(QObject):
         self.git_manager.set_workspace_path(path)
 
     def on_editor_opened(self, uri, lang_id, content, editor):
+
         self.lsp_client.on_file_opened(uri, lang_id, content, editor)
         editor.bridge.stage_lines_requested.connect(self.on_stage_lines)
         editor.bridge.apply_staged_changes_requested.connect(
@@ -188,13 +197,16 @@ class MainController(QObject):
 
     @Slot(str)
     def on_editor_log(self, message: str):
+
         self.main_window.log_to_output("Debug", message, raise_panel=False)
 
     def on_file_closed(self, uri: str):
+
         self.lsp_client.on_file_closed(uri)
 
     @Slot(str)
     def on_stage_lines(self, selected_text: str):
+
         clipboard = QApplication.clipboard()
         mime_data = QMimeData()
         mime_data.setText(selected_text)
@@ -203,6 +215,7 @@ class MainController(QObject):
 
     @Slot(EditorWidget)
     def on_apply_staged_changes(self, editor):
+
         clipboard = QApplication.clipboard()
         mime_data = clipboard.mimeData()
         if not mime_data.hasFormat("application/x-forge-hunk"):
@@ -216,32 +229,38 @@ class MainController(QObject):
         editor.apply_hunk(final_text)
 
     def _initialize_ui_state(self):
+
         if not AUTOSAVE_ENABLED:
             self.main_window.autosave_status_label.setText("Autosave Disabled")
 
     def shutdown(self):
+
         self.refactor_controller.exit_review_mode()
         self.workspace_manager.shutdown_lsp()
 
     @Slot(int)
     def on_tab_changed(self, index: int):
+
         editor = self.main_window.tab_widget.widget(index)
         self._update_ui_for_editor(editor)
         self._update_timeline_for_editor(editor)
 
     @Slot(EditorWidget)
     def on_file_modified(self, editor):
+
         if AUTOSAVE_ENABLED:
             self.autosave_timer.start()
 
     @Slot()
     def trigger_autosave(self):
+
         editor = self.main_window.get_current_editor()
         if editor and editor in self.file_manager.dirty_editors:
             self.file_manager.save_file(editor)
 
     @Slot(str, str)
     def on_file_saved(self, file_path: str, content: str):
+
         self.main_window.autosave_status_label.setText(
             f"Saved at {QTime.currentTime().toString('HH:mm:ss')}"
         )
@@ -253,6 +272,7 @@ class MainController(QObject):
 
     @Slot(dict)
     def on_theme_changed(self, theme_data: dict):
+
         for i in range(self.main_window.tab_widget.count()):
             widget = self.main_window.tab_widget.widget(i)
             if hasattr(widget, "apply_theme"):
@@ -265,6 +285,7 @@ class MainController(QObject):
         self.main_window.welcome_screen.apply_theme(theme_data)
 
     def _update_ui_for_editor(self, editor):
+
         is_diff = isinstance(editor, DiffEditorWidget)
         is_review_diff = getattr(editor, "is_review_diff", False)
         is_history_view = getattr(editor, "metadata", {}).get("is_history_view", False)
@@ -297,6 +318,7 @@ class MainController(QObject):
             timeline_panel.list_view_button.setChecked(True)
 
     def _update_timeline_for_editor(self, editor):
+
         is_history_view = getattr(editor, "metadata", {}).get("is_history_view", False)
         if is_history_view:
             return
@@ -332,6 +354,7 @@ class MainController(QObject):
         self.main_window.timeline_panel.update_view(file_path, unified_history)
 
     def _populate_timeline_details(self, data: dict):
+
         current_file_path = self._get_current_timeline_file()
         if not current_file_path:
             return
@@ -373,11 +396,11 @@ class MainController(QObject):
             self.git_controller.on_clone_repo_requested()
 
     def _get_current_timeline_file(self):
-        """Helper to get the file path associated with the current timeline view."""
         return self.main_window.timeline_panel.current_file_path
 
     @Slot(dict)
     def on_history_item_selected(self, data: dict):
+
         current_file_path = self._get_current_timeline_file()
         if not current_file_path:
             return
@@ -437,6 +460,7 @@ class MainController(QObject):
 
     @Slot(str)
     def on_history_restore_requested(self, history_path: str):
+
         current_file_path = self._get_current_timeline_file()
         if not current_file_path:
             return
@@ -466,21 +490,25 @@ class MainController(QObject):
 
     @Slot(str)
     def on_history_delete_requested(self, history_path: str):
+
         self.history_manager.delete_snapshot(history_path)
         self._update_timeline_for_editor(self.main_window.get_current_editor())
 
     @Slot(str)
     def on_history_delete_all_requested(self, file_path: str):
+
         self.history_manager.delete_all_snapshots(file_path)
         self._update_timeline_for_editor(self.main_window.get_current_editor())
 
     @Slot(str, bool)
     def on_history_pin_toggled(self, history_path: str, is_pinned: bool):
+
         self.history_manager.update_snapshot_meta(history_path, {"pinned": is_pinned})
         self._update_timeline_for_editor(self.main_window.get_current_editor())
 
     @Slot(str, str)
     def on_history_rename_requested(self, history_path: str, current_name: str):
+
         new_name, ok = QInputDialog.getText(
             self.main_window,
             "Rename Snapshot",
@@ -493,6 +521,7 @@ class MainController(QObject):
 
     @Slot(str)
     def on_history_compare_with_current(self, history_path: str):
+
         snapshots = self.history_manager.get_history_for_file(
             self._get_current_timeline_file()
         )
@@ -509,6 +538,7 @@ class MainController(QObject):
 
     @Slot(str)
     def on_history_show_contents_requested(self, history_path: str):
+
         current_file_path = self._get_current_timeline_file()
         if not current_file_path:
             return
@@ -539,6 +569,7 @@ class MainController(QObject):
 
     @Slot(object, list)
     def on_discard_changes_requested(self, diff_widget, file_paths: list[str]):
+
         if not file_paths:
             return
 

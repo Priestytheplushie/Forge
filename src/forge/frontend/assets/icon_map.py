@@ -226,6 +226,10 @@ def get_settings_icon(color: str = "#D8DEE9"):
     return _get_colorized_icon("settings.svg", QColor(color))
 
 
+def get_plus_icon() -> QIcon:
+    return _get_colorized_icon("plus.svg", QColor("#D8DEE9"))
+
+
 def get_tooltip_for_symbol(kind: int) -> str:
     meta = SYMBOL_META_DATA.get(kind, SYMBOL_META_DATA[KIND_KEYWORD])
     return meta["tooltip"]

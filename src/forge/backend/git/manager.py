@@ -83,6 +83,7 @@ class GitManager(QObject):
             self.repo_status_changed.emit(False)
             self.branches_updated.emit({}, "")
         except Exception as e:
+            self._log(f"Error initializing Git: {e}")
             self.repo = None
             self.repo_status_changed.emit(False)
             self.branches_updated.emit({}, "")
@@ -214,7 +215,6 @@ class GitManager(QObject):
                     original_content = self.repo.git.show(
                         f"{parent_sha}:{relative_path}"
                     )
-
                 except git.GitCommandError as e:
                     if "exists on disk, but not in" in e.stderr:
                         original_content = ""
@@ -340,47 +340,68 @@ class GitManager(QObject):
 
     def fetch(self):
         if not self.repo or not self.repo.remotes:
+            self._log("Error: No remote repository configured.")
             return
         try:
+            self._log(f"Fetching from '{self.repo.remotes.origin.name}'...")
             self.repo.remotes.origin.fetch()
+            self._log("Fetch successful.")
             self.refresh_status()
         except Exception as e:
             self._log(f"Error fetching: {e}")
 
     def pull(self):
         if not self.repo or not self.repo.remotes:
+            self._log("Error: No remote repository configured.")
             return
         try:
+            self._log(f"Pulling from '{self.repo.remotes.origin.name}'...")
             self.repo.remotes.origin.pull()
+            self._log("Pull successful.")
             self.refresh_status()
         except git.GitCommandError as e:
             if "merge conflict" in e.stderr.lower():
+                self._log("Pull resulted in merge conflicts. Please resolve them.")
                 self.refresh_status()
             else:
                 self._log(f"Error pulling: {e.stderr.strip()}")
+        except Exception as e:
+            self._log(f"An unexpected error occurred during pull: {e}")
 
     def push(self):
         if not self.repo or not self.repo.remotes:
+            self._log("Error: No remote repository configured.")
             return
         try:
+            self._log(f"Pushing to '{self.repo.remotes.origin.name}'...")
             self.repo.remotes.origin.push()
+            self._log("Push successful.")
             self.refresh_status()
         except git.GitCommandError as e:
             if "no upstream branch" in e.stderr:
                 self.upstream_branch_not_found.emit()
             else:
                 self._log(f"Error pushing: {e.stderr.strip()}")
+        except Exception as e:
+            self._log(f"An unexpected error occurred during push: {e}")
 
     def push_and_set_upstream(self):
         if not self.repo or not self.repo.remotes:
+            self._log("Error: No remote repository configured.")
             return
         try:
+            self._log(
+                f"Pushing and setting upstream for branch '{self.current_branch}'..."
+            )
             self.repo.git.push(
                 "--set-upstream", self.repo.remotes.origin.name, self.current_branch
             )
+            self._log("Push successful.")
             self.refresh_status()
         except git.GitCommandError as e:
             self._log(f"Error pushing: {e.stderr.strip()}")
+        except Exception as e:
+            self._log(f"An unexpected error occurred during push: {e}")
 
     def abort_merge(self):
         if not self.repo:
@@ -388,8 +409,11 @@ class GitManager(QObject):
         try:
             if (Path(self.repo.git_dir) / "MERGE_HEAD").exists():
                 self.repo.git.merge("--abort")
+                self._log("Merge aborted.")
                 self.is_in_merge_conflict = False
                 self.refresh_status()
+            else:
+                self._log("No active merge to abort.")
         except Exception as e:
             self._log(f"Error aborting merge: {e}")
 
@@ -442,6 +466,7 @@ class GitManager(QObject):
             if stage_all:
                 self.repo.git.add(A=True)
             self.repo.index.commit(message)
+            self._log(f'Committed changes with message: "{message}"')
             self.is_in_merge_conflict = False
             self.refresh_status()
         except Exception as e:
@@ -452,6 +477,7 @@ class GitManager(QObject):
             return
         try:
             self.repo.git.stash("push", "-m", message)
+            self._log("Stashed changes.")
             self.refresh_status()
         except Exception as e:
             self._log(f"Error stashing changes: {e}")
@@ -488,4 +514,5 @@ class GitManager(QObject):
         except git.GitCommandError:
             return ""
         except Exception as e:
+            self._log(f"Error getting HEAD content for {file_path_str}: {e}")
             return None

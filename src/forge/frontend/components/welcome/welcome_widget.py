@@ -7,8 +7,10 @@ from PySide6.QtWidgets import (
     QListWidget,
     QFrame,
     QSizePolicy,
+    QMenu,
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal, Qt, QPoint
+from PySide6.QtGui import QAction
 from ...assets.icon_map import get_status_icon
 
 
@@ -17,6 +19,7 @@ class WelcomeWidget(QWidget):
 
     action_triggered = Signal(str)
     open_recent_requested = Signal(str)
+    clear_recent_requested = Signal()
 
     def __init__(self, recent_projects: list, parent=None):
         super().__init__(parent)
@@ -33,8 +36,8 @@ class WelcomeWidget(QWidget):
         subtitle = QLabel("Your AI Collaborative Partner")
         subtitle.setObjectName("WelcomeSubtitle")
 
-        self.new_file_button = self._create_action_button(
-            "New File...", "file-plus.svg"
+        self.new_project_button = self._create_action_button(
+            "New Project...", "file-plus.svg"
         )
         self.open_folder_button = self._create_action_button(
             "Open Folder...", "folder.svg"
@@ -46,7 +49,7 @@ class WelcomeWidget(QWidget):
         left_layout.addWidget(title)
         left_layout.addWidget(subtitle)
         left_layout.addSpacing(30)
-        left_layout.addWidget(self.new_file_button)
+        left_layout.addWidget(self.new_project_button)
         left_layout.addWidget(self.open_folder_button)
         left_layout.addWidget(self.clone_repo_button)
 
@@ -57,8 +60,12 @@ class WelcomeWidget(QWidget):
         recent_title.setObjectName("RecentTitle")
 
         self.recent_list = QListWidget()
+        self.recent_list.setObjectName("RecentList")
         for project_path in recent_projects:
             self.recent_list.addItem(project_path)
+
+        self.recent_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.recent_list.customContextMenuRequested.connect(self.on_recent_context_menu)
 
         right_layout.addWidget(recent_title)
         right_layout.addWidget(self.recent_list)
@@ -76,6 +83,13 @@ class WelcomeWidget(QWidget):
             lambda item: self.open_recent_requested.emit(item.text())
         )
 
+    def on_recent_context_menu(self, point: QPoint):
+        menu = QMenu(self)
+        clear_action = QAction("Clear Recent Projects", self)
+        clear_action.triggered.connect(self.clear_recent_requested)
+        menu.addAction(clear_action)
+        menu.exec(self.recent_list.mapToGlobal(point))
+
     def _create_action_button(self, text: str, icon_name: str) -> QPushButton:
         button = QPushButton(f" {text}")
         button.setIcon(get_status_icon(icon_name))
@@ -84,5 +98,8 @@ class WelcomeWidget(QWidget):
         return button
 
     def apply_theme(self, theme_data: dict):
-
         pass
+
+    def update_recent_list(self, recent_projects: list):
+        self.recent_list.clear()
+        self.recent_list.addItems(recent_projects)
