@@ -22,9 +22,17 @@ function warn(msg, ...args) { console.warn(`[JS] ${msg}`, ...args); }
 function err(msg, ...args) { console.error(`[JS] ${msg}`, ...args); }
 
 
-function getConflictRegex() {
-    const pattern = "(<<<<<<< HEAD\\r?\\n)([\\s\\S]*?)(=======)(\\r?\\n[\\s\\S]*?)(>>>>>>> [\\s\\S]*?(\\r?\\n)?)";
-    return new RegExp(pattern, 'g');
+function isDiffEditorInstance(ed) {
+    return ed && typeof ed.getModifiedEditor === "function";
+}
+
+function getActiveModel() {
+    if (!editor) return null;
+    if (isDiffEditorInstance(editor)) {
+        const mod = editor.getModifiedEditor();
+        return mod ? mod.getModel() : null;
+    }
+    return editor.getModel();
 }
 
 function disposeModel(model) {
@@ -46,6 +54,12 @@ function disposeListener(listener) {
             warn('Listener dispose failed', e); 
         }
     }
+}
+
+
+function getConflictRegex() {
+    const pattern = "(<<<<<<< HEAD\\r?\\n)([\\s\\S]*?)(=======)(\\r?\\n[\\s\\S]*?)(>>>>>>> [\\s\\S]*?(\\r?\\n)?)";
+    return new RegExp(pattern, 'g');
 }
 
 
@@ -286,7 +300,7 @@ function initialize_editor(themeData, isDiffEditor = false) {
             });
 
             editor.onDidChangeModelContent(() => { 
-                const model = editor.getModel();
+                const model = getActiveModel();
                 if (model && model.isMergeConflict) {
                     update_merge_decorations();
                 }
@@ -303,7 +317,7 @@ function initialize_editor(themeData, isDiffEditor = false) {
                     run: function(ed) {
                         if (bridge) {
                             const selection = ed.getSelection();
-                            const model = ed.getModel();
+                            const model = getActiveModel();
                             if (model && selection) {
                                 const text = model.getValueInRange(selection);
                                 const hunk = text.split('\n').map(line => '+' + line).join('\n');
@@ -381,8 +395,7 @@ function initialize_editor(themeData, isDiffEditor = false) {
 
 
 function enter_merge_mode() {
-    if (!editor) return;
-    const model = editor.getModel();
+    const model = getActiveModel();
     if (model) {
         model.isMergeConflict = true;
         update_merge_decorations();
@@ -390,18 +403,18 @@ function enter_merge_mode() {
 }
 
 function exit_merge_mode() {
-    if (!editor) return;
-    const model = editor.getModel();
-    if (model) {
+    const model = getActiveModel();
+    if (editor && model) {
         model.isMergeConflict = false;
-        currentMergeDecorations = editor.deltaDecorations(currentMergeDecorations, []);
+        if (!isDiffEditorInstance(editor)) {
+            currentMergeDecorations = editor.deltaDecorations(currentMergeDecorations, []);
+        }
     }
 }
 
 function update_merge_decorations() {
-    if (!editor) return;
-    const model = editor.getModel(); 
-    if (!model) return;
+    const model = getActiveModel();
+    if (!editor || !model) return;
 
         const content = model.getValue();
     const regex = getConflictRegex(); 
@@ -441,13 +454,14 @@ function update_merge_decorations() {
         });
     }
 
+        if (!isDiffEditorInstance(editor)) {
         currentMergeDecorations = editor.deltaDecorations(currentMergeDecorations, newDecorations);
+    }
 }
 
 function accept_merge(type, conflictRange) {
-    if (!editor) return;
-    const model = editor.getModel(); 
-    if (!model || !conflictRange) return;
+    const model = getActiveModel();
+    if (!editor || !model || !conflictRange) return;
 
     const content = model.getValue();
     const regex = getConflictRegex(); 
@@ -488,11 +502,11 @@ function accept_merge(type, conflictRange) {
 }
 
 function check_for_conflicts(callback_id) {
+    const model = getActiveModel();
     if (!bridge) { 
         warn('check_for_conflicts called before bridge was ready.'); 
         return; 
     }
-    const model = editor ? editor.getModel() : null;
     if (!model) { 
         try { 
             bridge.receive_conflict_check_result(callback_id, false); 
@@ -522,7 +536,7 @@ function set_theme(themeData) {
 }
 
 function set_diff_content(original_content, modified_content) {
-    if (!editor || typeof editor.setModel !== 'function') return;
+    if (!editor || !isDiffEditorInstance(editor)) return;
     try {
         const originalModel = monaco.editor.createModel(original_content || '', 'python');
         const modifiedModel = monaco.editor.createModel(modified_content || '', 'python');
@@ -535,7 +549,14 @@ function set_diff_content(original_content, modified_content) {
 function set_read_only(read_only) { 
     if (editor) {
         try {
-            editor.updateOptions({ readOnly: read_only });
+            if (isDiffEditorInstance(editor)) {
+                const orig = editor.getOriginalEditor();
+                const mod = editor.getModifiedEditor();
+                if (orig && typeof orig.updateOptions === 'function') orig.updateOptions({ readOnly: read_only });
+                if (mod && typeof mod.updateOptions === 'function') mod.updateOptions({ readOnly: read_only });
+            } else {
+                if (typeof editor.updateOptions === 'function') editor.updateOptions({ readOnly: read_only });
+            }
         } catch (e) {
             warn('Failed to set read-only', e);
         }
@@ -547,12 +568,17 @@ function set_content(content, language, uri_string, callback_id) {
 
         try {
         isEditorModelReady = false;
-        const currentModel = editor.getModel();
+        const currentModel = isDiffEditorInstance(editor) ? null : editor.getModel();
 
                 if (currentModel) {
-            if (currentModel.original) disposeModel(currentModel.original);
-            if (currentModel.modified) disposeModel(currentModel.modified);
-            if (!currentModel.original && !currentModel.modified) disposeModel(currentModel);
+            disposeModel(currentModel);
+        }
+
+                if (isDiffEditorInstance(editor)) {
+            const orig = editor.getOriginalEditor();
+            const mod = editor.getModifiedEditor();
+            if (orig) disposeModel(orig.getModel());
+            if (mod) disposeModel(mod.getModel());
         }
 
                 disposeListener(contentChangeListener); 
@@ -560,10 +586,11 @@ function set_content(content, language, uri_string, callback_id) {
         disposeListener(modelSetListener); 
         modelSetListener = null;
 
+        const uri = uri_string ? monaco.Uri.parse(uri_string) : monaco.Uri.parse('inmemory://model/1');
         const newModel = monaco.editor.createModel(
             content || '', 
             language || 'plaintext', 
-            monaco.Uri.parse(uri_string)
+            uri
         );
 
                 contentChangeListener = newModel.onDidChangeContent(() => { 
@@ -576,13 +603,37 @@ function set_content(content, language, uri_string, callback_id) {
             }
         });
 
-                modelSetListener = editor.onDidChangeModel(() => { 
-            isEditorModelReady = true; 
-            disposeListener(modelSetListener); 
-            modelSetListener = null; 
-        });
+                modelSetListener = (function waitForModelSet() {
+            if (isDiffEditorInstance(editor)) {
 
-                editor.setModel(newModel);
+                return null;
+            }
+            try {
+                isEditorModelReady = true; 
+            } catch (e) {
+                warn('modelSetListener failed', e);
+            }
+            return null;
+        })();
+
+                if (!isDiffEditorInstance(editor)) {
+            editor.setModel(newModel);
+            isEditorModelReady = true;
+        } else {
+
+            const originalModel = monaco.editor.createModel('', language || 'plaintext');
+            try {
+                editor.setModel({ original: originalModel, modified: newModel });
+            } catch (e) {
+                warn('diff editor setModel failed', e);
+
+                const mod = editor.getModifiedEditor();
+                if (mod && typeof mod.setModel === 'function') {
+                    mod.setModel(newModel);
+                }
+            }
+            isEditorModelReady = true;
+        }
 
                 if (bridge) {
             try { 
@@ -597,12 +648,18 @@ function set_content(content, language, uri_string, callback_id) {
 }
 
 function apply_hunk(text_to_insert) { 
-    if (!editor) return; 
+    const model = getActiveModel();
+    if (!editor || !model) return; 
     try {
-        const selection = editor.getSelection(); 
+        const selection = isDiffEditorInstance(editor) ? editor.getModifiedEditor().getSelection() : editor.getSelection(); 
         if (selection) {
             const op = { range: selection, text: text_to_insert || '', forceMoveMarkers: true }; 
-            editor.executeEdits('forge-hunk-paste', [op]);
+            if (isDiffEditorInstance(editor)) {
+                const modEd = editor.getModifiedEditor();
+                if (modEd && typeof modEd.executeEdits === 'function') modEd.executeEdits('forge-hunk-paste', [op]);
+            } else {
+                editor.executeEdits('forge-hunk-paste', [op]);
+            }
         }
     } catch (e) {
         warn('Failed to apply hunk', e);
@@ -729,7 +786,8 @@ function set_semantic_tokens(data, callback_id) {
 function getText(callback_id) { 
     if (editor && bridge) {
         try { 
-            const value = editor.getValue() || '';
+            const model = getActiveModel();
+            const value = model ? (model.getValue() || '') : '';
             bridge.receive_text(callback_id, value); 
         } catch (e) { 
             warn('bridge.receive_text failed', e); 
@@ -740,22 +798,27 @@ function getText(callback_id) {
 function layout_editor() { 
     if (editor) {
         try { 
-            editor.layout(); 
+            if (isDiffEditorInstance(editor)) {
+                const orig = editor.getOriginalEditor();
+                const mod = editor.getModifiedEditor();
+                if (orig && typeof orig.layout === 'function') orig.layout();
+                if (mod && typeof mod.layout === 'function') mod.layout();
+            } else if (typeof editor.layout === 'function') {
+                editor.layout(); 
+            }
         } catch (e) { 
-            warn('editor.layout failed', e); 
+            warn('editor.layout failed', e);
         }
     }
 }
 
 function set_diagnostics(markers) {
-    if (editor) {
-        const model = editor.getModel();
-        if (model) {
-            try { 
-                monaco.editor.setModelMarkers(model, 'forge-diagnostics', markers || []); 
-            } catch (e) { 
-                warn('setModelMarkers failed', e); 
-            }
+    const model = getActiveModel();
+    if (model) {
+        try { 
+            monaco.editor.setModelMarkers(model, 'forge-diagnostics', markers || []); 
+        } catch (e) { 
+            warn('setModelMarkers failed', e); 
         }
     }
 }
@@ -764,19 +827,38 @@ function jump_and_highlight(line, char) {
     if (!editor) return;
     try {
         const position = { lineNumber: line, column: char };
-        editor.setPosition(position);
-        editor.revealLineInCenter(line);
-        const model = editor.getModel();
-        if (model) {
-            const range = { 
-                startLineNumber: line, 
-                startColumn: 1, 
-                endLineNumber: line, 
-                endColumn: model.getLineMaxColumn(line) 
-            };
-            editor.setSelection(range);
+        if (isDiffEditorInstance(editor)) {
+            const mod = editor.getModifiedEditor();
+            if (mod && typeof mod.setPosition === 'function') mod.setPosition(position);
+            if (typeof editor.revealLineInCenter === 'function') editor.revealLineInCenter(line);
+            if (mod) {
+                const model = mod.getModel();
+                if (model) {
+                    const range = { 
+                        startLineNumber: line, 
+                        startColumn: 1, 
+                        endLineNumber: line, 
+                        endColumn: model.getLineMaxColumn(line) 
+                    };
+                    mod.setSelection(range);
+                }
+                mod.focus();
+            }
+        } else {
+            editor.setPosition(position);
+            editor.revealLineInCenter(line);
+            const model = editor.getModel();
+            if (model) {
+                const range = { 
+                    startLineNumber: line, 
+                    startColumn: 1, 
+                    endLineNumber: line, 
+                    endColumn: model.getLineMaxColumn(line) 
+                };
+                editor.setSelection(range);
+            }
+            editor.focus();
         }
-        editor.focus();
     } catch (e) { 
         warn('jump_and_highlight failed', e); 
     }
@@ -825,23 +907,21 @@ function go_to_next_change() {
     if (!change) return;
 
         try {
-        const modifiedEditor = (typeof editor.getModifiedEditor === 'function') 
-            ? editor.getModifiedEditor() 
-            : null;
+        const modifiedEditor = isDiffEditorInstance(editor) ? editor.getModifiedEditor() : editor;
         const targetLine = change.modifiedStartLineNumber 
             || change.modifiedEndLineNumber 
             || change.originalStartLineNumber;
 
-                    if (modifiedEditor && modifiedEditor.getModel() && targetLine) {
-            editor.revealLineInCenter(targetLine, monaco.editor.ScrollType.Smooth);
+                    if (modifiedEditor && modifiedEditor.getModel && targetLine) {
+            if (typeof editor.revealLineInCenter === 'function') editor.revealLineInCenter(targetLine, monaco.editor.ScrollType.Smooth);
             const range = { 
                 startLineNumber: targetLine, 
                 startColumn: 1, 
                 endLineNumber: targetLine, 
                 endColumn: modifiedEditor.getModel().getLineMaxColumn(targetLine) 
             };
-            modifiedEditor.setSelection(range);
-            modifiedEditor.focus();
+            if (typeof modifiedEditor.setSelection === 'function') modifiedEditor.setSelection(range);
+            if (typeof modifiedEditor.focus === 'function') modifiedEditor.focus();
         }
     } catch (e) { 
         warn('go_to_next_change failed', e); 
@@ -859,23 +939,21 @@ function go_to_previous_change() {
     if (!change) return;
 
         try {
-        const modifiedEditor = (typeof editor.getModifiedEditor === 'function') 
-            ? editor.getModifiedEditor() 
-            : null;
+        const modifiedEditor = isDiffEditorInstance(editor) ? editor.getModifiedEditor() : editor;
         const targetLine = change.modifiedStartLineNumber 
             || change.modifiedEndLineNumber 
             || change.originalStartLineNumber;
 
-                    if (modifiedEditor && modifiedEditor.getModel() && targetLine) {
-            editor.revealLineInCenter(targetLine, monaco.editor.ScrollType.Smooth);
+                    if (modifiedEditor && modifiedEditor.getModel && targetLine) {
+            if (typeof editor.revealLineInCenter === 'function') editor.revealLineInCenter(targetLine, monaco.editor.ScrollType.Smooth);
             const range = { 
                 startLineNumber: targetLine, 
                 startColumn: 1, 
                 endLineNumber: targetLine, 
                 endColumn: modifiedEditor.getModel().getLineMaxColumn(targetLine) 
             };
-            modifiedEditor.setSelection(range);
-            modifiedEditor.focus();
+            if (typeof modifiedEditor.setSelection === 'function') modifiedEditor.setSelection(range);
+            if (typeof modifiedEditor.focus === 'function') modifiedEditor.focus();
         }
     } catch (e) { 
         warn('go_to_previous_change failed', e); 
