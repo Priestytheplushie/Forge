@@ -13,19 +13,20 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QGroupBox,
     QTreeView,
-    QFileSystemModel,
     QDialogButtonBox,
     QWidget,
     QMessageBox,
     QMenu,
 )
 from PySide6.QtCore import Qt, QDir, QTimer, QPoint
-from PySide6.QtGui import QDesktopServices, QAction
+from PySide6.QtGui import QStandardItemModel, QStandardItem, QIcon, QAction
 from pathlib import Path
 import os
 import shutil
 import git
 import tempfile
+
+from ..components.icon_provider import IconProvider
 
 
 class NewProjectDialog(QDialog):
@@ -35,9 +36,10 @@ class NewProjectDialog(QDialog):
         self.setWindowTitle("Create New Project")
         self.setMinimumSize(800, 600)
 
-        self.temp_dir = tempfile.mkdtemp(prefix="forge-project-preview-")
         self.project_path = ""
         self.imported_files = []
+
+        self.icon_provider = IconProvider()
 
         main_layout = QHBoxLayout(self)
 
@@ -121,15 +123,9 @@ class NewProjectDialog(QDialog):
         right_layout = QVBoxLayout(right_panel)
         right_layout.addWidget(QLabel("Project Preview:"))
         self.preview_tree = QTreeView()
-        self.preview_model = QFileSystemModel()
-        self.preview_model.setFilter(
-            QDir.Filter.NoDotAndDotDot | QDir.Filter.AllEntries
-        )
+        self.preview_model = QStandardItemModel()
         self.preview_tree.setModel(self.preview_model)
-        self.preview_tree.hideColumn(1)
-        self.preview_tree.hideColumn(2)
-        self.preview_tree.hideColumn(3)
-        self.preview_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.preview_tree.setHeaderHidden(True)
         right_layout.addWidget(self.preview_tree)
 
         button_box = QDialogButtonBox(
@@ -148,7 +144,7 @@ class NewProjectDialog(QDialog):
 
         self.update_timer = QTimer(self)
         self.update_timer.setSingleShot(True)
-        self.update_timer.setInterval(300)
+        self.update_timer.setInterval(100)
         self.update_timer.timeout.connect(self._update_preview)
 
         self.lang_combo.currentTextChanged.connect(self._schedule_update)
@@ -161,6 +157,7 @@ class NewProjectDialog(QDialog):
         self.reqs_edit.textChanged.connect(self._schedule_update)
         self.import_button.clicked.connect(self._import_files)
         self.clear_imports_button.clicked.connect(self._clear_imports)
+        self.preview_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.preview_tree.customContextMenuRequested.connect(self._preview_context_menu)
 
         self._update_and_validate()
@@ -204,34 +201,45 @@ class NewProjectDialog(QDialog):
         self.gitignore_combo.setEnabled(self.git_check.isChecked())
         self.license_combo.setEnabled(self.git_check.isChecked())
 
-        for item in Path(self.temp_dir).iterdir():
-            if item.is_dir():
-                shutil.rmtree(item)
-            else:
-                item.unlink()
+        self.preview_model.clear()
+        root_node = self.preview_model.invisibleRootItem()
 
-        preview_root = Path(self.temp_dir)
-        (preview_root / "src").mkdir(exist_ok=True)
+        src_item = QStandardItem(self.icon_provider.folder_icon(), "src")
+        root_node.appendRow(src_item)
 
         for file_path_str in self.imported_files:
             file_path = Path(file_path_str)
-            shutil.copy(file_path, preview_root / file_path.name)
+            item = QStandardItem(
+                self.icon_provider.file_icon(file_path_str), file_path.name
+            )
+            item.setData(file_path_str, Qt.ItemDataRole.UserRole)
+            root_node.appendRow(item)
 
         if self.git_check.isChecked():
-            (preview_root / ".git").mkdir(exist_ok=True)
+            root_node.appendRow(QStandardItem(self.icon_provider.folder_icon(), ".git"))
             if self.gitignore_combo.currentText() != "None":
-                (preview_root / ".gitignore").touch()
+                root_node.appendRow(
+                    QStandardItem(
+                        self.icon_provider.file_icon(".gitignore"), ".gitignore"
+                    )
+                )
             if self.license_combo.currentText() != "None":
-                (preview_root / "LICENSE").touch()
+                root_node.appendRow(
+                    QStandardItem(self.icon_provider.file_icon("LICENSE"), "LICENSE")
+                )
 
         if self.lang_combo.currentText() == "Python":
             if self.venv_check.isChecked():
-                (preview_root / ".venv").mkdir(exist_ok=True)
+                root_node.appendRow(
+                    QStandardItem(self.icon_provider.folder_icon(), ".venv")
+                )
             if self.reqs_edit.toPlainText().strip():
-                (preview_root / "requirements.txt").touch()
-
-        self.preview_model.setRootPath("")
-        self.preview_tree.setRootIndex(self.preview_model.setRootPath(self.temp_dir))
+                root_node.appendRow(
+                    QStandardItem(
+                        self.icon_provider.file_icon("requirements.txt"),
+                        "requirements.txt",
+                    )
+                )
 
     def _import_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Import Files")
@@ -248,17 +256,14 @@ class NewProjectDialog(QDialog):
         if not index.isValid():
             return
 
-        file_path_str = self.preview_model.filePath(index)
-        file_path = Path(file_path_str)
+        item = self.preview_model.itemFromIndex(index)
+        original_path = item.data(Qt.ItemDataRole.UserRole)
 
-        original_path = next(
-            (p for p in self.imported_files if Path(p).name == file_path.name), None
-        )
         if not original_path:
             return
 
         menu = QMenu(self)
-        delete_action = QAction(f"Remove '{file_path.name}' from Project", self)
+        delete_action = QAction(f"Remove '{item.text()}' from Project", self)
         delete_action.triggered.connect(
             lambda: self._remove_imported_file(original_path)
         )
@@ -280,7 +285,10 @@ class NewProjectDialog(QDialog):
                 )
                 return
 
-            shutil.copytree(self.temp_dir, proj_dir, dirs_exist_ok=True)
+            proj_dir.mkdir(parents=True)
+            (proj_dir / "src").mkdir(exist_ok=True)
+            for file_path in self.imported_files:
+                shutil.copy(file_path, proj_dir / Path(file_path).name)
 
             if (
                 self.lang_combo.currentText() == "Python"
@@ -289,9 +297,7 @@ class NewProjectDialog(QDialog):
                 (proj_dir / "requirements.txt").write_text(self.reqs_edit.toPlainText())
 
             if self.git_check.isChecked():
-                if not (proj_dir / ".git").exists():
-                    git.Repo.init(str(proj_dir))
-
+                git.Repo.init(str(proj_dir))
                 gitignore_type = self.gitignore_combo.currentText()
                 if gitignore_type == "Python":
                     (proj_dir / ".gitignore").write_text(
@@ -299,7 +305,6 @@ class NewProjectDialog(QDialog):
                     )
                 elif gitignore_type == "Java":
                     (proj_dir / ".gitignore").write_text("# Java\n\n*.class\n*.jar\n")
-
                 if self.license_combo.currentText() != "None":
                     (proj_dir / "LICENSE").write_text(
                         f"Placeholder for {self.license_combo.currentText()} license."
@@ -310,17 +315,6 @@ class NewProjectDialog(QDialog):
             QMessageBox.critical(
                 self, "Project Creation Failed", f"An error occurred: {e}"
             )
-        finally:
-            self.cleanup()
 
     def reject(self):
-        self.cleanup()
         super().reject()
-
-    def cleanup(self):
-        self.preview_model.setRootPath("")
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def closeEvent(self, event):
-        self.cleanup()
-        super().closeEvent(event)
