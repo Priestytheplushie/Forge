@@ -14,13 +14,10 @@ from .editor_bridge import EditorBridge
 
 
 class RecoverableWebEnginePage(QWebEnginePage):
-    """A QWebEnginePage that detects critical JS errors and emits a Python signal."""
-
     critical_js_error_detected = Signal()
 
     def javaScriptConsoleMessage(self, level, message, line_number, source_id):
         if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
-
             if "TypeError: Property description must be an object" in message:
                 self.critical_js_error_detected.emit()
         super().javaScriptConsoleMessage(level, message, line_number, source_id)
@@ -31,7 +28,8 @@ class EditorWidget(QWidget):
     js_log_received = Signal(str)
     completion_requested = Signal(QObject, str, str, int, int)
     hover_requested = Signal(QObject, str, str, int, int)
-    code_action_requested = Signal(QObject, str, str, list)
+    code_action_requested = Signal(QObject, str, str, dict, list)
+    codelens_requested = Signal(QObject, str, str)
     rename_requested = Signal(str, int, int)
     cursor_position_changed = Signal(int, int)
     mark_as_resolved_requested = Signal(object)
@@ -60,12 +58,10 @@ class EditorWidget(QWidget):
         self.web_view = QWebEngineView()
 
         page = RecoverableWebEnginePage(profile, self)
-
         bg_color = self.theme_data.get("colors", {}).get("editor.background", "#1e1e1e")
         page.setBackgroundColor(QColor(bg_color))
 
         page.critical_js_error_detected.connect(self._trigger_recovery_reload)
-
         self.web_view.renderProcessTerminated.connect(
             self._on_render_process_terminated
         )
@@ -97,6 +93,9 @@ class EditorWidget(QWidget):
         self.bridge._hover_requested_from_js.connect(self._on_hover_requested_from_js)
         self.bridge._code_action_requested_from_js.connect(
             self._on_code_action_requested_from_js
+        )
+        self.bridge._codelens_requested_from_js.connect(
+            self._on_codelens_requested_from_js
         )
 
         self.mark_resolved_button = QPushButton("Mark as Resolved", self)
@@ -266,9 +265,15 @@ class EditorWidget(QWidget):
     def _on_hover_requested_from_js(self, callback_id, uri, line, character):
         self.hover_requested.emit(self, callback_id, uri, line, character)
 
-    @Slot(str, str, list)
-    def _on_code_action_requested_from_js(self, callback_id, uri, diagnostics):
-        self.code_action_requested.emit(self, callback_id, uri, diagnostics)
+    @Slot(str, str, dict, list)
+    def _on_code_action_requested_from_js(
+        self, callback_id, uri, range_data, diagnostics
+    ):
+        self.code_action_requested.emit(self, callback_id, uri, range_data, diagnostics)
+
+    @Slot(str, str)
+    def _on_codelens_requested_from_js(self, callback_id, uri):
+        self.codelens_requested.emit(self, callback_id, uri)
 
     def resolve_completions(self, callback_id: str, completions: list):
         if self.is_ready:
@@ -281,6 +286,18 @@ class EditorWidget(QWidget):
             hover_json = json.dumps(hover_result) if hover_result else "null"
             self.web_view.page().runJavaScript(
                 f"resolve_hover('{callback_id}', {hover_json});"
+            )
+
+    def resolve_code_actions(self, callback_id: str, actions: list):
+        if self.is_ready:
+            self.web_view.page().runJavaScript(
+                f"resolve_code_actions('{callback_id}', {json.dumps(actions)});"
+            )
+
+    def resolve_codelens(self, callback_id: str, lenses: list):
+        if self.is_ready:
+            self.web_view.page().runJavaScript(
+                f"resolve_codelens('{callback_id}', {json.dumps(lenses)});"
             )
 
     def set_content(self, content: str, lang_id: str, uri: str, callback):

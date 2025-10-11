@@ -7,6 +7,8 @@ import time
 
 
 class CloneWorker(QThread):
+    """Worker thread to run git clone in the background."""
+
     progress = Signal(str)
     finished = Signal(bool, str)
 
@@ -18,7 +20,7 @@ class CloneWorker(QThread):
         try:
 
             class CloneProgress(git.remote.RemoteProgress):
-                def update(self2, op_code, cur_count, max_count=None, message=""):
+                def update(self, op_code, cur_count, max_count=None, message=""):
                     self.progress.emit(f"-> {message}")
 
             self.progress.emit(f"Cloning '{self.url}' into '{self.path}'...")
@@ -28,6 +30,100 @@ class CloneWorker(QThread):
             self.finished.emit(False, str(e.stderr))
         except Exception as e:
             self.finished.emit(False, str(e))
+
+
+class GitStatusWorker(QThread):
+    """Worker thread to run git status checks in the background."""
+
+    status_updated = Signal(dict)
+
+    def __init__(self, repo, parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self.is_running = True
+
+    def run(self):
+        while self.is_running:
+            if not self.repo or not self.repo.git_dir:
+                time.sleep(2)
+                continue
+
+            status_data = {}
+            try:
+
+                all_branches = {"local": [], "remote": []}
+                current_branch_name = self.repo.active_branch.name
+                for head in self.repo.heads:
+                    all_branches["local"].append((head.name, "up-to-date"))
+                for remote in self.repo.remotes:
+                    for ref in remote.refs:
+                        if ref.name != f"{remote.name}/HEAD":
+                            all_branches["remote"].append((ref.name, "up-to-date"))
+                status_data["branches"] = all_branches
+                status_data["current_branch"] = current_branch_name
+
+                tracking_branch = self.repo.active_branch.tracking_branch()
+                if tracking_branch:
+                    ahead = sum(
+                        1
+                        for _ in self.repo.iter_commits(
+                            f"{tracking_branch.name}..{current_branch_name}"
+                        )
+                    )
+                    behind = sum(
+                        1
+                        for _ in self.repo.iter_commits(
+                            f"{current_branch_name}..{tracking_branch.name}"
+                        )
+                    )
+                    status_data["remote_status"] = (ahead, behind)
+                else:
+                    status_data["remote_status"] = (0, 0)
+
+                try:
+                    head_commit = self.repo.head.commit
+                    status_data["head_commit"] = (
+                        head_commit.author.name,
+                        head_commit.committed_date,
+                        head_commit.hexsha[:7],
+                    )
+                except ValueError:
+                    status_data["head_commit"] = ("", 0, "")
+
+                staged = [
+                    {"path": d.a_path or d.b_path, "status": d.change_type}
+                    for d in self.repo.index.diff("HEAD", R=True)
+                ]
+                unstaged = [
+                    {"path": d.a_path or d.b_path, "status": d.change_type}
+                    for d in self.repo.index.diff(None)
+                ]
+                untracked = [
+                    p for p in self.repo.untracked_files if not self.repo.ignored(p)
+                ]
+                for path in untracked:
+                    unstaged.append({"path": path, "status": "A"})
+
+                status_data["staged"] = staged
+                status_data["unstaged"] = unstaged
+                status_data["is_merge_conflict"] = (
+                    Path(self.repo.git_dir) / "MERGE_HEAD"
+                ).exists()
+
+            except TypeError:
+                status_data["current_branch"] = (
+                    self.repo.head.object.hexsha[:7] if self.repo.head else "Detached"
+                )
+                status_data["remote_status"] = (0, 0)
+            except Exception as e:
+                print(f"[GitStatusWorker] Error: {e}")
+                status_data["error"] = str(e)
+
+            self.status_updated.emit(status_data)
+            time.sleep(2)
+
+    def stop(self):
+        self.is_running = False
 
 
 class GitManager(QObject):
@@ -47,12 +143,9 @@ class GitManager(QObject):
         super().__init__(parent)
         self.workspace_path = None
         self.repo = None
-        self.current_branch = "main"
         self.clone_worker = None
+        self.status_worker = None
         self.is_in_merge_conflict = False
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.setInterval(2000)
-        self.refresh_timer.timeout.connect(self.refresh_status)
 
     def _log(self, message: str):
         self.git_command_output.emit(
@@ -72,12 +165,17 @@ class GitManager(QObject):
     @Slot(str)
     def set_workspace_path(self, path: str):
         self.workspace_path = Path(path)
-        self.refresh_timer.stop()
+        if self.status_worker:
+            self.status_worker.stop()
+            self.status_worker.wait()
+            self.status_worker = None
+
         try:
             self.repo = git.Repo(path, search_parent_directories=True)
             self.repo_status_changed.emit(True)
-            self.refresh_status()
-            self.refresh_timer.start()
+            self.status_worker = GitStatusWorker(self.repo, self)
+            self.status_worker.status_updated.connect(self.on_status_updated)
+            self.status_worker.start()
         except git.InvalidGitRepositoryError:
             self.repo = None
             self.repo_status_changed.emit(False)
@@ -88,13 +186,37 @@ class GitManager(QObject):
             self.repo_status_changed.emit(False)
             self.branches_updated.emit({}, "")
 
+    @Slot(dict)
+    def on_status_updated(self, status_data: dict):
+        if "error" in status_data:
+            return
+
+        self.branch_changed.emit(status_data.get("current_branch", ""))
+        self.branches_updated.emit(
+            status_data.get("branches", {}), status_data.get("current_branch", "")
+        )
+
+        ahead, behind = status_data.get("remote_status", (0, 0))
+        self.remote_status_changed.emit(ahead, behind)
+
+        author, cdate, sha = status_data.get("head_commit", ("", 0, ""))
+        if author:
+            self.head_commit_changed.emit(author, self._get_relative_time(cdate), sha)
+        else:
+            self.head_commit_changed.emit("", "", "")
+
+        staged = status_data.get("staged", [])
+        unstaged = status_data.get("unstaged", [])
+        self.status_changed.emit(staged, unstaged)
+
     @Slot()
     def refresh_status(self):
+
         if not self.repo or not self.repo.git_dir:
             return
-        self.get_all_branches()
+
         if (Path(self.repo.git_dir) / "MERGE_HEAD").exists():
-            unresolved, staged = set(), set()
+            unresolved, staged_merge = set(), set()
             for line in self.repo.git.status("--porcelain").strip().split("\n"):
                 if not line:
                     continue
@@ -110,76 +232,20 @@ class GitManager(QObject):
                     "AA",
                     "UU",
                 ):
-                    staged.add(path)
+                    staged_merge.add(path)
 
             unresolved = {p for p in unresolved if not p.startswith(".forge/")}
-            staged = {p for p in staged if not p.startswith(".forge/")}
+            staged_merge = {p for p in staged_merge if not p.startswith(".forge/")}
 
             if not self.is_in_merge_conflict:
                 self.is_in_merge_conflict = True
                 self.merge_conflict_detected.emit(sorted(list(unresolved)))
 
-            self.status_changed.emit(sorted(list(staged)), sorted(list(unresolved)))
-            return
+            self.status_changed.emit(
+                sorted(list(staged_merge)), sorted(list(unresolved))
+            )
         elif self.is_in_merge_conflict:
             self.is_in_merge_conflict = False
-
-        try:
-            try:
-                head_commit = self.repo.head.commit
-                self.head_commit_changed.emit(
-                    head_commit.author.name,
-                    self._get_relative_time(head_commit.committed_date),
-                    head_commit.hexsha[:7],
-                )
-            except ValueError:
-                self.head_commit_changed.emit("", "", "")
-
-            self.current_branch = self.repo.active_branch.name
-            self.branch_changed.emit(self.current_branch)
-
-            tracking_branch = self.repo.active_branch.tracking_branch()
-            if tracking_branch:
-                ahead = sum(
-                    1
-                    for _ in self.repo.iter_commits(
-                        f"{tracking_branch.name}..{self.current_branch}"
-                    )
-                )
-                behind = sum(
-                    1
-                    for _ in self.repo.iter_commits(
-                        f"{self.current_branch}..{tracking_branch.name}"
-                    )
-                )
-                self.remote_status_changed.emit(ahead, behind)
-            else:
-                self.remote_status_changed.emit(0, 0)
-        except TypeError:
-            try:
-                self.current_branch = self.repo.head.object.hexsha[:7]
-                self.branch_changed.emit(self.current_branch)
-            except Exception:
-                self.branch_changed.emit("Detached HEAD")
-            self.remote_status_changed.emit(0, 0)
-            return
-        except Exception:
-            self.remote_status_changed.emit(0, 0)
-
-        staged = [
-            {"path": d.a_path or d.b_path, "status": d.change_type}
-            for d in self.repo.index.diff("HEAD", R=True)
-        ]
-        unstaged = [
-            {"path": d.a_path or d.b_path, "status": d.change_type}
-            for d in self.repo.index.diff(None)
-        ]
-
-        for path in self.repo.untracked_files:
-            if not self.repo.ignored(path):
-                unstaged.append({"path": path, "status": "A"})
-
-        self.status_changed.emit(staged, unstaged)
 
     def get_file_commit_history(self, file_path_str: str) -> list:
         if not self.repo or not file_path_str:
@@ -187,17 +253,15 @@ class GitManager(QObject):
         try:
             relative_path = Path(file_path_str).relative_to(self.repo.working_dir)
             commits = list(self.repo.iter_commits(paths=str(relative_path)))
-            history = []
-            for commit in commits:
-                history.append(
-                    {
-                        "sha": commit.hexsha,
-                        "author": commit.author.name,
-                        "timestamp": commit.committed_date * 1000,
-                        "message": commit.summary,
-                    }
-                )
-            return history
+            return [
+                {
+                    "sha": c.hexsha,
+                    "author": c.author.name,
+                    "timestamp": c.committed_date * 1000,
+                    "message": c.summary,
+                }
+                for c in commits
+            ]
         except Exception:
             return []
 
@@ -215,31 +279,12 @@ class GitManager(QObject):
                     original_content = self.repo.git.show(
                         f"{parent_sha}:{relative_path}"
                     )
-                except git.GitCommandError as e:
-                    if "exists on disk, but not in" in e.stderr:
-                        original_content = ""
-                    else:
-                        raise e
+                except git.GitCommandError:
+                    original_content = ""
             return (original_content, modified_content)
         except Exception as e:
             self._log(f"Error getting commit diff: {e}")
             return ("", "")
-
-    def get_all_branches(self):
-        if not self.repo:
-            return
-        try:
-            all_branches = {"local": [], "remote": []}
-            current_branch_name = self.repo.active_branch.name
-            for head in self.repo.heads:
-                all_branches["local"].append((head.name, "up-to-date"))
-            for remote in self.repo.remotes:
-                for ref in remote.refs:
-                    if ref.name != f"{remote.name}/HEAD":
-                        all_branches["remote"].append((ref.name, "up-to-date"))
-            self.branches_updated.emit(all_branches, current_branch_name)
-        except Exception:
-            self.branches_updated.emit({}, "")
 
     @Slot(str)
     def checkout_branch(self, branch_name: str):
@@ -256,8 +301,7 @@ class GitManager(QObject):
         if not self.repo:
             return
         try:
-            new_branch = self.repo.create_head(name, base)
-            new_branch.checkout()
+            self.repo.create_head(name, base).checkout()
             self.refresh_status()
         except git.GitCommandError as e:
             self._log(f"Error creating branch: {e.stderr.strip()}")
@@ -326,7 +370,7 @@ class GitManager(QObject):
         if self.workspace_path and not self.repo:
             try:
                 self.repo = git.Repo.init(self.workspace_path)
-                self.set_workspace_path(self.workspace_path)
+                self.set_workspace_path(str(self.workspace_path))
             except Exception as e:
                 self._log(f"Error initializing repository: {e}")
 
@@ -391,10 +435,12 @@ class GitManager(QObject):
             return
         try:
             self._log(
-                f"Pushing and setting upstream for branch '{self.current_branch}'..."
+                f"Pushing and setting upstream for branch '{self.repo.active_branch.name}'..."
             )
             self.repo.git.push(
-                "--set-upstream", self.repo.remotes.origin.name, self.current_branch
+                "--set-upstream",
+                self.repo.remotes.origin.name,
+                self.repo.active_branch.name,
             )
             self._log("Push successful.")
             self.refresh_status()
@@ -486,21 +532,12 @@ class GitManager(QObject):
         if not self.repo:
             return
         try:
-            untracked_in_selection = [
-                p for p in file_paths if p in self.repo.untracked_files
-            ]
-            tracked_in_selection = [
-                p for p in file_paths if p not in untracked_in_selection
-            ]
-
-            for file_path_str in untracked_in_selection:
-                full_path = Path(self.repo.working_dir) / file_path_str
-                if full_path.is_file():
-                    os.remove(full_path)
-
-            if tracked_in_selection:
-                self.repo.git.checkout("--", *tracked_in_selection)
-
+            untracked = [p for p in file_paths if p in self.repo.untracked_files]
+            tracked = [p for p in file_paths if p not in untracked]
+            for p in untracked:
+                os.remove(Path(self.repo.working_dir) / p)
+            if tracked:
+                self.repo.git.checkout("--", *tracked)
             self.refresh_status()
         except Exception as e:
             self._log(f"Error discarding changes: {e}")

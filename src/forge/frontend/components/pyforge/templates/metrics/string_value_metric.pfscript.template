@@ -1,0 +1,20 @@
+# string_value_metric.pfscript.template
+# This is a template for a metric that returns a string value.
+
+# --- Instructions ---
+# 1. Rename the function 'my_string_metric' to something unique.
+# 2. Rename the metric name "My String Value" to what you want to see in the UI.
+# 3. Modify the logic to return the string you want to display.
+
+@pf.metric(name="My String Value", type="value")
+def my_string_metric():
+    """
+    This function should return a string.
+    Useful for displaying states, names, or modes.
+    """
+    # Example: Get the name of a 'current_level' object
+    try:
+        current_level = pf.get('current_level')
+        return current_level.name
+    except (NameError, AttributeError):
+        return "N/A"

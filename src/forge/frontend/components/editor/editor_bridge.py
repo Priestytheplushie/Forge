@@ -11,10 +11,12 @@ class EditorBridge(QObject):
     model_ready = Signal(str)
     cursor_position_changed = Signal(int, int)
     all_conflicts_resolved_in_editor = Signal()
+    validate_master_script_requested = Signal()
 
     _completion_requested_from_js = Signal(str, str, int, int)
     _hover_requested_from_js = Signal(str, str, int, int)
-    _code_action_requested_from_js = Signal(str, str, list)
+    _code_action_requested_from_js = Signal(str, str, dict, list)
+    _codelens_requested_from_js = Signal(str, str)
     rename_requested = Signal(str, int, int)
 
     stage_lines_requested = Signal(str)
@@ -29,7 +31,6 @@ class EditorBridge(QObject):
 
     @Slot()
     def on_web_channel_ready(self):
-        """Called from JS when the web channel is established."""
         self._internal_web_channel_ready.emit()
 
     @Slot()
@@ -68,6 +69,10 @@ class EditorBridge(QObject):
     def on_apply_staged_changes(self):
         self.apply_staged_changes_requested.emit()
 
+    @Slot()
+    def on_validate_master_script(self):
+        self.validate_master_script_requested.emit()
+
     @Slot(str, str, int, int)
     def request_completions(
         self, callback_id: str, uri: str, line: int, character: int
@@ -78,9 +83,17 @@ class EditorBridge(QObject):
     def request_hover(self, callback_id: str, uri: str, line: int, character: int):
         self._hover_requested_from_js.emit(callback_id, uri, line, character)
 
-    @Slot(str, str, list)
-    def request_code_actions(self, callback_id: str, uri: str, diagnostics: list):
-        self._code_action_requested_from_js.emit(callback_id, uri, diagnostics)
+    @Slot(str, str, dict, list)
+    def request_code_actions(
+        self, callback_id: str, uri: str, range_data: dict, diagnostics: list
+    ):
+        self._code_action_requested_from_js.emit(
+            callback_id, uri, range_data, diagnostics
+        )
+
+    @Slot(str, str)
+    def request_codelens(self, callback_id: str, uri: str):
+        self._codelens_requested_from_js.emit(callback_id, uri)
 
     @Slot(str, int, int)
     def request_rename(self, uri: str, line: int, character: int):
@@ -102,7 +115,6 @@ class DiffBridge(QObject):
 
     @Slot()
     def on_web_channel_ready(self):
-        """Called from JS when the web channel is established."""
         self._internal_web_channel_ready.emit()
 
     @Slot()

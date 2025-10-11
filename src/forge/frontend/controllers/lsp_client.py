@@ -5,14 +5,8 @@ from urllib.parse import urlparse, unquote
 from PySide6.QtCore import QObject, Slot, Signal
 from PySide6.QtWidgets import QInputDialog
 from ..components.editor.editor_widget import EditorWidget
-
-
-def uri_to_path(uri: str) -> Path:
-    parsed = urlparse(uri)
-    path_str = unquote(parsed.path)
-    if sys.platform == "win32" and path_str.startswith("/"):
-        path_str = path_str[1:]
-    return Path(path_str).resolve()
+from ..components.pyforge.script_editor import PyForgeScriptEditor
+from ..utils import uri_to_path
 
 
 class LSPClient(QObject):
@@ -30,6 +24,8 @@ class LSPClient(QObject):
         self.pending_hover_requests = {}
         self.pending_symbol_requests = {}
         self.pending_rename_requests = {}
+        self.pending_code_action_requests = {}
+        self.pending_codelens_requests = {}
         self._pending_token_request_queue = []
         self.outline_editor = None
         self.is_lsp_ready = False
@@ -41,9 +37,17 @@ class LSPClient(QObject):
 
     def set_lsp_manager(self, lsp_manager):
         self.lsp_manager = lsp_manager
+        if not self.lsp_manager:
+            return
         self.lsp_manager.lsp_notification_received.connect(self.handle_lsp_notification)
         self.lsp_manager.lsp_response_received.connect(self.handle_lsp_response)
         self.lsp_manager.lsp_ready.connect(self._on_lsp_ready)
+
+        pf_stub_path = (
+            Path(self.main_window.app_root) / "src" / "pyforge" / "agent" / "pf.pyi"
+        )
+        if pf_stub_path.exists():
+            self.lsp_manager.add_extra_file_for_analysis(str(pf_stub_path))
 
     def clear_lsp_manager(self):
         self.lsp_manager = None
@@ -92,15 +96,18 @@ class LSPClient(QObject):
         editor.cursor_position_changed.connect(self.on_cursor_position_changed)
         editor.code_action_requested.connect(self.on_code_action_requested)
         editor.rename_requested.connect(self.on_rename_requested)
+        editor.codelens_requested.connect(self.on_codelens_requested)
 
-        if self.lsp_manager and lang_id == "python":
+        is_pyforge_script = isinstance(editor, PyForgeScriptEditor)
+        if self.lsp_manager and (lang_id == "python" or is_pyforge_script):
+            effective_lang_id = "python"
             self.document_versions[uri] = 1
             self.lsp_manager.send_notification(
                 "textDocument/didOpen",
                 {
                     "textDocument": {
                         "uri": uri,
-                        "languageId": lang_id,
+                        "languageId": effective_lang_id,
                         "version": 1,
                         "text": content,
                     }
@@ -111,10 +118,7 @@ class LSPClient(QObject):
 
     @Slot(str)
     def on_file_closed(self, uri):
-        if (
-            self.outline_editor
-            and self.file_manager.open_file_paths.get(self.outline_editor) is None
-        ):
+        if self.outline_editor and self.outline_editor.current_uri == uri:
             self.outline_editor = None
             self.main_window.outline_panel.clear_symbols()
 
@@ -150,7 +154,7 @@ class LSPClient(QObject):
     @Slot(QObject, str, str, int, int)
     def on_completion_requested(self, editor, callback_id, uri, line, char):
         if (
-            not uri.startswith("file://")
+            not (uri.startswith("file://") or uri.startswith("untitled:"))
             or not self.lsp_manager
             or not self.is_lsp_ready
         ):
@@ -166,7 +170,7 @@ class LSPClient(QObject):
     @Slot(QObject, str, str, int, int)
     def on_hover_requested(self, editor, callback_id, uri, line, char):
         if (
-            not uri.startswith("file://")
+            not (uri.startswith("file://") or uri.startswith("untitled:"))
             or not self.lsp_manager
             or not self.is_lsp_ready
         ):
@@ -179,46 +183,35 @@ class LSPClient(QObject):
         request_id = self.lsp_manager.send_request("textDocument/hover", params)
         self.pending_hover_requests[request_id] = (editor, callback_id)
 
-    @Slot(QObject, str, str, list)
-    def on_code_action_requested(self, editor, callback_id, uri, diagnostics):
+    @Slot(QObject, str, str, dict, list)
+    def on_code_action_requested(
+        self, editor, callback_id, uri, range_data, diagnostics
+    ):
         if not self.lsp_manager or not self.is_lsp_ready:
             editor.resolve_code_actions(callback_id, [])
             return
+        params = {
+            "textDocument": {"uri": uri},
+            "range": range_data,
+            "context": {"diagnostics": diagnostics},
+        }
+        request_id = self.lsp_manager.send_request("textDocument/codeAction", params)
+        self.pending_code_action_requests[request_id] = (editor, callback_id)
 
-        hunk_diagnostics = [
-            d for d in diagnostics if d.get("code", "").startswith("forge-hunk")
-        ]
-        if hunk_diagnostics:
-            hunk_id = hunk_diagnostics[0]["code"]
-            actions = [
-                {
-                    "title": "Accept Hunk",
-                    "kind": "quickfix",
-                    "command": {
-                        "title": "Accept Hunk",
-                        "command": "forge.acceptHunk",
-                        "arguments": [uri, hunk_id],
-                    },
-                },
-                {
-                    "title": "Discard Hunk",
-                    "kind": "quickfix",
-                    "command": {
-                        "title": "Discard Hunk",
-                        "command": "forge.discardHunk",
-                        "arguments": [uri, hunk_id],
-                    },
-                },
-            ]
-            editor.resolve_code_actions(callback_id, actions)
-        else:
-            editor.resolve_code_actions(callback_id, [])
+    @Slot(QObject, str, str)
+    def on_codelens_requested(self, editor, callback_id, uri: str):
+        if not self.lsp_manager or not self.is_lsp_ready:
+            editor.resolve_codelens(callback_id, [])
+            return
+        request_id = self.lsp_manager.send_request(
+            "textDocument/codeLens", {"textDocument": {"uri": uri}}
+        )
+        self.pending_codelens_requests[request_id] = (editor, callback_id)
 
     @Slot(str, int, int)
     def on_rename_requested(self, uri, line, char):
         if not self.lsp_manager or not self.is_lsp_ready:
             return
-
         new_name, ok = QInputDialog.getText(
             self.main_window, "Rename Symbol", "Enter new name:"
         )
@@ -251,36 +244,125 @@ class LSPClient(QObject):
     @Slot(dict)
     def handle_lsp_response(self, response: dict):
         request_id = response.get("id")
+        result = response.get("result")
         if request_id in self.pending_completion_requests:
             editor, cb_id = self.pending_completion_requests.pop(request_id)
-            editor.resolve_completions(
-                cb_id, response.get("result", {}).get("items", [])
-            )
+            items = result.get("items", []) if result else []
+            editor.resolve_completions(cb_id, items)
         elif request_id in self.pending_hover_requests:
             editor, cb_id = self.pending_hover_requests.pop(request_id)
-            editor.resolve_hover(cb_id, response.get("result"))
+            editor.resolve_hover(cb_id, result)
         elif request_id in self.pending_semantic_token_requests:
             uri = self.pending_semantic_token_requests.pop(request_id)
-            path = str(uri_to_path(uri))
-            if path in self.file_manager.editors_by_path:
-                self.file_manager.editors_by_path[path].show_semantic_tokens(
-                    response.get("result", {}).get("data", [])
-                )
+            editor_found = None
+            if uri.startswith("untitled:"):
+                for editor in self.file_manager.editors_by_path.values():
+                    if editor.current_uri == uri:
+                        editor_found = editor
+                        break
+            else:
+                try:
+                    path = str(uri_to_path(uri))
+                    editor_found = self.file_manager.editors_by_path.get(path)
+                except (ValueError, OSError):
+                    pass
+            if editor_found:
+                tokens = result.get("data", []) if result else []
+                editor_found.show_semantic_tokens(tokens)
+
         elif request_id in self.pending_symbol_requests:
             uri = self.pending_symbol_requests.pop(request_id)
-            symbols = response.get("result", [])
-            active_uri = None
-            if self.outline_editor and self.file_manager.open_file_paths.get(
-                self.outline_editor
-            ):
-                active_uri = Path(
-                    self.file_manager.open_file_paths[self.outline_editor]
-                ).as_uri()
+            symbols = result if result else []
+            active_uri = (
+                self.outline_editor.current_uri if self.outline_editor else None
+            )
             if uri == active_uri:
                 self.main_window.outline_panel.update_symbols(symbols)
         elif request_id in self.pending_rename_requests:
             self.pending_rename_requests.pop(request_id)
-            self.rename_response_received.emit(response.get("result", {}))
+            self.rename_response_received.emit(result or {})
+        elif request_id in self.pending_code_action_requests:
+            editor, cb_id = self.pending_code_action_requests.pop(request_id)
+            editor.resolve_code_actions(
+                cb_id, self.add_custom_code_actions(result or [])
+            )
+        elif request_id in self.pending_codelens_requests:
+            editor, cb_id = self.pending_codelens_requests.pop(request_id)
+            editor.get_text(
+                lambda content: self._resolve_codelens(cb_id, editor, content, result)
+            )
+
+    def _resolve_codelens(self, cb_id, editor, content, result):
+        if content is None:
+            editor.resolve_codelens(cb_id, [])
+            return
+        lenses = self.add_custom_codelens(content)
+        editor.resolve_codelens(cb_id, lenses)
+
+    def add_custom_codelens(self, content: str) -> list:
+        lenses = []
+        lines = content.splitlines()
+        for i, line in enumerate(lines):
+            line_num = i + 1
+            stripped_line = line.strip()
+            if stripped_line.startswith("def on_"):
+                hook_name = stripped_line.split("(", 1)[0].replace("def ", "")
+
+                doc = self.main_window.pyforge_controller.all_hook_definitions.get(
+                    hook_name, {}
+                ).get("docstring", "This function runs on a specific agent event.")
+                lenses.append(
+                    {
+                        "range": {
+                            "startLineNumber": line_num,
+                            "startColumn": 1,
+                            "endLineNumber": line_num,
+                            "endColumn": 1,
+                        },
+                        "command": {"title": "(PyForge Hook)", "tooltip": doc},
+                    }
+                )
+            elif "@pf.metric" in stripped_line:
+                lenses.append(
+                    {
+                        "range": {
+                            "startLineNumber": line_num,
+                            "startColumn": 1,
+                            "endLineNumber": line_num,
+                            "endColumn": 1,
+                        },
+                        "command": {
+                            "title": "(PyForge Custom Metric)",
+                            "tooltip": "This function defines a value that appears in the Metrics panel.",
+                        },
+                    }
+                )
+            elif "@pf.override" in stripped_line:
+                lenses.append(
+                    {
+                        "range": {
+                            "startLineNumber": line_num,
+                            "startColumn": 1,
+                            "endLineNumber": line_num,
+                            "endColumn": 1,
+                        },
+                        "command": {
+                            "title": "⚠ (PyForge Override)",
+                            "tooltip": "Warning: This function modifies core agent behavior and can cause instability.",
+                        },
+                    }
+                )
+        return lenses
+
+    def add_custom_code_actions(self, actions: list) -> list:
+        actions.append(
+            {
+                "title": "Discover in PyForge",
+                "kind": "refactor",
+                "command": {"title": "Discover", "command": "pyforge.discoverSymbol"},
+            }
+        )
+        return actions
 
     @Slot(dict)
     def handle_lsp_notification(self, notification: dict):
@@ -291,26 +373,24 @@ class LSPClient(QObject):
             if not uri:
                 return
 
-            server_diagnostics = [
-                d
-                for d in params.get("diagnostics", [])
-                if not str(d.get("code", "")).startswith("forge-hunk")
-            ]
-            current_hunks = [
-                d
-                for d in self.diagnostics_by_uri.get(uri, [])
-                if str(d.get("code", "")).startswith("forge-hunk")
-            ]
-            all_diagnostics = server_diagnostics + current_hunks
+            diagnostics = params.get("diagnostics", [])
+            editor_found = None
+            if uri.startswith("untitled:"):
+                for editor in self.file_manager.editors_by_path.values():
+                    if editor.current_uri == uri:
+                        editor_found = editor
+                        break
+            else:
+                try:
+                    path = str(uri_to_path(uri))
+                    editor_found = self.file_manager.editors_by_path.get(path)
+                except (ValueError, OSError):
+                    pass
+            if editor_found:
+                editor_found.show_diagnostics(diagnostics)
 
-            path = str(uri_to_path(uri))
-            if path in self.file_manager.editors_by_path:
-                self.file_manager.editors_by_path[path].show_diagnostics(
-                    all_diagnostics
-                )
-
-            if all_diagnostics:
-                self.diagnostics_by_uri[uri] = all_diagnostics
+            if diagnostics:
+                self.diagnostics_by_uri[uri] = diagnostics
             elif uri in self.diagnostics_by_uri:
                 del self.diagnostics_by_uri[uri]
 
@@ -345,11 +425,8 @@ class LSPClient(QObject):
 
     def update_outline_panel(self, editor: EditorWidget | None):
         self.outline_editor = editor
-        if editor:
-            path = self.file_manager.open_file_paths.get(editor)
-            if path:
-                uri = Path(path).as_uri()
-                self.request_document_symbols(uri)
+        if editor and editor.current_uri:
+            self.request_document_symbols(editor.current_uri)
         else:
             self.main_window.outline_panel.clear_symbols()
 

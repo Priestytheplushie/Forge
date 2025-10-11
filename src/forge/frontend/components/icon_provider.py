@@ -24,3 +24,22 @@ class IconProvider:
     def file_icon(self, file_path: str = "") -> QIcon:
 
         return self._file_icon
+
+
+from PySide6.QtWidgets import QFileIconProvider
+from PySide6.QtCore import QFileInfo
+from ..assets.icon_map import get_pyforge_script_icon
+
+
+class CustomIconProvider(QFileIconProvider):
+    """
+    An icon provider that returns a custom icon for PyForge scripts
+    and falls back to the default system icons for everything else.
+    """
+
+    def icon(self, info):
+
+        if isinstance(info, QFileInfo) and info.suffix() == "pfscript":
+            return get_pyforge_script_icon()
+
+        return super().icon(info)

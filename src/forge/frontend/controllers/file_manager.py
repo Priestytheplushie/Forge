@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QWidget
 from PySide6.QtCore import QObject, Slot, Signal
 from ..components.editor.editor_widget import EditorWidget
 from ..components.editor.diff_editor_widget import DiffEditorWidget
+from ..components.pyforge.script_editor import PyForgeScriptEditor
 
 
 class FileManager(QObject):
@@ -29,9 +30,6 @@ class FileManager(QObject):
         self._connect_signals()
 
     def _connect_signals(self):
-        self.main_window.file_menu.actions()[2].triggered.connect(self.open_file_dialog)
-        self.main_window.file_menu.actions()[3].triggered.connect(self.save_file)
-        self.main_window.file_menu.actions()[4].triggered.connect(self.save_file_as)
         self.main_window.file_explorer.file_double_clicked.connect(
             self.open_file_from_path
         )
@@ -51,7 +49,9 @@ class FileManager(QObject):
         self.workspace_path = path
 
     def get_language_id(self, file_path: str) -> str:
-        return "python" if Path(file_path).suffix == ".py" else "plaintext"
+        if Path(file_path).suffix in [".py", ".pfscript"]:
+            return "python"
+        return "plaintext"
 
     def is_dirty(self, editor: QWidget) -> bool:
         return editor in self.dirty_editors
@@ -67,22 +67,27 @@ class FileManager(QObject):
 
     @Slot(str)
     def open_file_from_path(self, file_path: str, is_merge_conflict: bool = False):
-        if not self.workspace_path:
-            QMessageBox.warning(
-                self.main_window,
-                "No Workspace",
-                "Please open a workspace folder first.",
-            )
+        if not Path(file_path).exists():
+            if not file_path.startswith("Untitled"):
+                QMessageBox.warning(
+                    self.main_window,
+                    "File Not Found",
+                    f"The file '{file_path}' does not exist.",
+                )
             return
 
-        workspace_p = Path(self.workspace_path).resolve()
-        file_p = Path(file_path).resolve()
+        if self.workspace_path:
+            workspace_p = Path(self.workspace_path).resolve()
+            file_p = Path(file_path).resolve()
+            if workspace_p not in file_p.parents and workspace_p != file_p.parent:
+                is_script = file_path.endswith(".pfscript")
+                is_main_menu_action = (
+                    self.main_window.sender() is self.main_window.open_file_action
+                )
+                if not is_script and not is_main_menu_action:
+                    return
 
-        if workspace_p not in file_p.parents and workspace_p != file_p.parent:
-            if self.main_window.sender() is not self.main_window.file_menu.actions()[2]:
-                return
-
-        canonical_path = str(file_p)
+        canonical_path = str(Path(file_path).resolve())
         if canonical_path in self.editors_by_path:
             editor = self.editors_by_path[canonical_path]
             self.main_window.tab_widget.setCurrentWidget(editor)
@@ -94,7 +99,19 @@ class FileManager(QObject):
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
 
-            if self.editor_cache:
+            editor = None
+            if file_path.endswith(".pfscript"):
+                editor = PyForgeScriptEditor(
+                    self.theme_manager.get_current_theme_data(), self.main_window
+                )
+                editor.is_global_script = (
+                    Path(file_path).parent
+                    == self.main_window.pyforge_controller.script_storage_path
+                )
+                editor.set_session_active(
+                    self.main_window.pyforge_controller.pyforge_manager.is_session_active()
+                )
+            elif self.editor_cache:
                 editor = self.editor_cache.pop()
                 editor.apply_theme(self.theme_manager.get_current_theme_data())
             else:
@@ -107,12 +124,14 @@ class FileManager(QObject):
 
             editor.setProperty("is_merge_editor", is_merge_conflict)
 
-            self.main_window.add_editor_tab(file_path, editor)
+            index = self.main_window.tab_widget.addTab(editor, "...")
+            self.main_window.tab_widget.setCurrentIndex(index)
 
-            uri = file_p.as_uri()
+            uri = Path(canonical_path).as_uri()
             lang_id = self.get_language_id(file_path)
 
             def on_model_ready():
+                self.main_window.add_editor_tab(file_path, editor)
                 self.file_opened.emit(uri, lang_id, content, editor)
                 if is_merge_conflict:
                     editor.enter_merge_mode()
@@ -189,8 +208,15 @@ class FileManager(QObject):
 
             path = self.open_file_paths.pop(editor_widget, None)
             if path:
-                uri = Path(path).as_uri()
-                self.editors_by_path.pop(path, None)
+                uri = (
+                    Path(path).as_uri()
+                    if Path(path).exists()
+                    else f"untitled:{Path(path).name}"
+                )
+
+                lookup_key = str(Path(path).resolve()) if Path(path).exists() else path
+                self.editors_by_path.pop(lookup_key, None)
+
                 self.file_closed.emit(uri)
                 self.dirty_editors.discard(editor_widget)
 
@@ -199,7 +225,7 @@ class FileManager(QObject):
             editor_widget.setParent(None)
 
             if isinstance(editor_widget, EditorWidget) and not isinstance(
-                editor_widget, DiffEditorWidget
+                editor_widget, (DiffEditorWidget, PyForgeScriptEditor)
             ):
                 self.editor_cache.append(editor_widget)
 
@@ -211,16 +237,31 @@ class FileManager(QObject):
                 self.dirty_editors.discard(editor_to_close)
                 self.handle_close_tab(index, force=True)
 
+    @Slot()
     def save_file(self, editor=None):
-        if editor is None:
+        if editor is None or not isinstance(editor, QWidget):
             editor = self.main_window.get_current_editor()
 
-        if (
-            editor
-            and isinstance(editor, EditorWidget)
-            and editor in self.open_file_paths
-        ):
-            file_path = self.open_file_paths[editor]
+        if not editor:
+            return
+
+        file_path = self.open_file_paths.get(editor, "")
+        is_py_file = file_path.endswith(".py")
+        is_session_active = (
+            self.main_window.pyforge_controller.pyforge_manager.is_session_active()
+        )
+
+        if is_session_active and is_py_file:
+            self.main_window.pyforge_controller.on_hot_reload_requested()
+            self.mark_file_clean(editor)
+            return
+
+        if isinstance(editor, PyForgeScriptEditor):
+            if file_path and "Untitled" in file_path:
+                self.save_script_as(editor)
+                return
+
+        if isinstance(editor, EditorWidget) and editor in self.open_file_paths:
             if file_path:
                 editor.get_text(
                     lambda content, e=editor, p=file_path: self._on_get_text_for_save(
@@ -238,6 +279,7 @@ class FileManager(QObject):
                 f.write(content)
             self.mark_file_clean(editor)
             self.file_saved.emit(file_path, content)
+
         except Exception as e:
             QMessageBox.critical(
                 self.main_window, "Error", f"Could not save file:\n{e}"
@@ -246,10 +288,41 @@ class FileManager(QObject):
     @Slot()
     def save_file_as(self):
         editor = self.main_window.get_current_editor()
-        if isinstance(editor, EditorWidget):
-            editor.get_text(self._on_get_text_for_save_as)
+        if isinstance(editor, PyForgeScriptEditor):
+            self.save_script_as(editor)
+        elif isinstance(editor, EditorWidget):
+            editor.get_text(self._on_get_text_for_save_as_regular_file)
 
-    def _on_get_text_for_save_as(self, content):
+    def save_script_as(self, editor: PyForgeScriptEditor):
+        if editor.is_global_script:
+            start_dir = str(self.main_window.pyforge_controller.script_storage_path)
+        else:
+            start_dir = str(self.main_window.pyforge_controller.workspace_script_path)
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self.main_window,
+            "Save PyForge Script As...",
+            start_dir,
+            "PyForge Scripts (*.pfscript)",
+        )
+        if file_path:
+            old_path = self.open_file_paths.pop(editor, None)
+            if old_path:
+                self.editors_by_path.pop(old_path, None)
+
+            self.open_file_paths[editor] = file_path
+            self.editors_by_path[file_path] = editor
+            index = self.main_window.tab_widget.indexOf(editor)
+            self.main_window.tab_widget.setTabText(index, os.path.basename(file_path))
+            editor.current_uri = Path(file_path).as_uri()
+
+            editor.get_text(
+                lambda content, e=editor, p=file_path: self._on_get_text_for_save(
+                    content, e, p
+                )
+            )
+
+    def _on_get_text_for_save_as_regular_file(self, content):
         if content is None:
             return
         editor = self.main_window.get_current_editor()
@@ -284,7 +357,10 @@ class FileManager(QObject):
                     self.main_window.tab_widget.setTabText(index, current_text[:-2])
 
     @Slot(str)
-    def handle_new_file(self, parent_dir):
+    def handle_new_file(self, parent_dir=None):
+        if not parent_dir or not isinstance(parent_dir, str):
+            parent_dir = self.workspace_path or str(Path.home())
+
         file_name, ok = QInputDialog.getText(
             self.main_window, "New File", "Enter file name:"
         )
@@ -292,7 +368,32 @@ class FileManager(QObject):
             new_path = Path(parent_dir) / file_name
             try:
                 if not new_path.exists():
-                    new_path.touch()
+                    if file_name == "master.pfscript":
+                        template_path = (
+                            Path(self.main_window.app_root)
+                            / "src"
+                            / "forge"
+                            / "frontend"
+                            / "components"
+                            / "pyforge"
+                            / "templates"
+                            / "master.pfscript.template"
+                        )
+                        if template_path.exists():
+                            content = template_path.read_text(encoding="utf-8")
+                            new_path.write_text(content, encoding="utf-8")
+                        else:
+                            new_path.write_text(
+                                "import pf\n\n# Master script created, but template not found.\n",
+                                encoding="utf-8",
+                            )
+                    elif file_name.endswith(".pfscript"):
+                        new_path.write_text(
+                            "import pf\n\npf.log('Hello from script!')\n",
+                            encoding="utf-8",
+                        )
+                    else:
+                        new_path.touch()
                 else:
                     QMessageBox.warning(
                         self.main_window,
@@ -345,6 +446,26 @@ class FileManager(QObject):
     @Slot(str)
     def handle_delete_item(self, path_str):
         path = Path(path_str)
+
+        if path.name == "master.pfscript":
+            if self.main_window.pyforge_controller.pyforge_manager.is_session_active():
+                QMessageBox.warning(
+                    self.main_window,
+                    "Action Blocked",
+                    "Cannot delete `master.pfscript` while a PyForge session is active.",
+                )
+                return
+            else:
+                reply = QMessageBox.question(
+                    self.main_window,
+                    "Confirm Delete",
+                    "Are you sure you want to delete `master.pfscript`?\n\nThis will revert all custom agent behavior to default.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    return
+
         is_dir = path.is_dir()
         item_type = "folder" if is_dir else "file"
         reply = QMessageBox.question(
@@ -356,6 +477,8 @@ class FileManager(QObject):
         )
         if reply == QMessageBox.StandardButton.Yes:
             try:
+
+                self.close_tab_by_path(str(path.resolve()))
                 if is_dir:
                     shutil.rmtree(path)
                 else:

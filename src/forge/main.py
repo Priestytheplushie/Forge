@@ -11,6 +11,10 @@ def _bootstrap_path():
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
 
+    pyforge_path = APP_ROOT_PATH / "src" / "pyforge"
+    if str(pyforge_path) not in sys.path:
+        sys.path.insert(0, str(pyforge_path))
+
 
 _bootstrap_path()
 

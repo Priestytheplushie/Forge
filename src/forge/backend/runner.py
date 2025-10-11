@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import threading
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 
@@ -36,15 +37,28 @@ class ProcessRunner(QThread):
                 errors="replace",
                 cwd=self.cwd,
                 startupinfo=startupinfo,
+                bufsize=1,
             )
 
-            if self.process.stdout:
-                for line in iter(self.process.stdout.readline, ""):
-                    self.stdout_received.emit(line)
+            def stream_reader(pipe, signal):
+                try:
+                    for line in iter(pipe.readline, ""):
+                        signal.emit(line)
+                finally:
+                    pipe.close()
 
-            if self.process.stderr:
-                for line in iter(self.process.stderr.readline, ""):
-                    self.stderr_received.emit(line)
+            stdout_thread = threading.Thread(
+                target=stream_reader, args=(self.process.stdout, self.stdout_received)
+            )
+            stderr_thread = threading.Thread(
+                target=stream_reader, args=(self.process.stderr, self.stderr_received)
+            )
+
+            stdout_thread.start()
+            stderr_thread.start()
+
+            stdout_thread.join()
+            stderr_thread.join()
 
             self.process.wait()
             self.finished.emit(self.process.returncode)
@@ -61,3 +75,8 @@ class ProcessRunner(QThread):
         if self.process and self.process.poll() is None:
             print("[ProcessRunner] Terminating process.")
             self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                print("[ProcessRunner] Process did not terminate, killing.")
+                self.process.kill()

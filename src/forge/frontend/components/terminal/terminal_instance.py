@@ -63,11 +63,20 @@ class TerminalInstance(QWidget):
             self.web_view.page().runJavaScript("clear_terminal();")
             self.web_view.page().runJavaScript("request_initial_size();")
 
-    def send_command(self, command: str):
-        if self.is_backend_started:
-            self.backend.write_to_pty(command)
+    def send_command(self, command):
+        """Sends a command to the backend. Can be a string or a list of arguments."""
+        if isinstance(command, list):
+
+            final_command = (
+                " ".join(f'"{arg}"' if " " in arg else arg for arg in command) + "\r\n"
+            )
         else:
-            self._command_queue.append(command)
+            final_command = command
+
+        if self.is_backend_started:
+            self.backend.write_to_pty(final_command)
+        else:
+            self._command_queue.append(final_command)
 
     def force_resize(self):
         """Public method to trigger a delayed resize of the JS terminal."""

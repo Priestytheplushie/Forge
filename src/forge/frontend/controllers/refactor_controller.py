@@ -74,7 +74,8 @@ class RefactorController(QObject):
         self.main_window.review_toolbar.finish_review_requested.connect(
             self.on_finish_review
         )
-        self.main_window.review_placeholder.refactor_button.clicked.connect(
+
+        self.main_window.review_view.refactor_button.clicked.connect(
             lambda: self.main_window.refactor_menu.exec(QCursor.pos())
         )
 
@@ -406,7 +407,6 @@ class RefactorController(QObject):
 
     @Slot()
     def on_accept_all_review_changes(self):
-
         if not self.review_session_data or "changes" not in self.review_session_data:
             self.exit_review_mode()
             return

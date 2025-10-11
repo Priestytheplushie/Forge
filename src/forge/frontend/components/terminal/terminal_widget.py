@@ -43,12 +43,10 @@ class TerminalWidget(QWidget):
         add_button = QToolButton()
         add_button.setIcon(get_plus_icon())
         add_button.setToolTip("New Terminal")
-
         split_button = QToolButton()
         split_button.setIcon(get_split_icon())
         split_button.setToolTip("Split Terminal (coming soon)")
         split_button.setEnabled(False)
-
         kill_button = QToolButton()
         kill_button.setIcon(get_trash_icon())
         kill_button.setToolTip("Kill Terminal")
@@ -78,8 +76,8 @@ class TerminalWidget(QWidget):
         self.shutdown_all()
         self.create_new_terminal()
 
-    @Slot(bool)
-    def create_new_terminal(self) -> TerminalInstance | None:
+    @Slot(str)
+    def create_new_terminal(self, name: str = "shell") -> TerminalInstance | None:
         if not self.workspace_path:
             return None
 
@@ -92,19 +90,23 @@ class TerminalWidget(QWidget):
         self.terminals.append(instance)
         self.terminal_stack.addWidget(instance)
 
-        list_item = QListWidgetItem("shell")
+        list_item = QListWidgetItem(name)
         list_item.setData(Qt.ItemDataRole.UserRole, instance)
         self.terminal_list.addItem(list_item)
         self.terminal_list.setCurrentItem(list_item)
 
         instance.name_changed.connect(
-            lambda name, inst=instance: self.on_terminal_name_changed(inst, name)
+            lambda new_name, inst=instance: self.on_terminal_name_changed(
+                inst, new_name
+            )
         )
+
+        if name != "shell":
+            self.on_terminal_name_changed(instance, name)
 
         return instance
 
     def force_resize_current_terminal(self):
-        """Forces the currently visible terminal instance to resize its pty."""
         current_instance = self.terminal_stack.currentWidget()
         if isinstance(current_instance, TerminalInstance):
             current_instance.force_resize()
@@ -115,24 +117,37 @@ class TerminalWidget(QWidget):
             instance = current.data(Qt.ItemDataRole.UserRole)
             self.terminal_stack.setCurrentWidget(instance)
 
-    @Slot()
-    def kill_current_terminal(self):
-        current_item = self.terminal_list.currentItem()
-        if not current_item:
+    def kill_terminal_instance(self, instance_to_kill: TerminalInstance):
+        for i in range(self.terminal_list.count()):
+            item = self.terminal_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == instance_to_kill:
+                self._kill_item(item)
+                break
+
+    def _kill_item(self, item_to_kill: QListWidgetItem):
+        if not item_to_kill:
             return
 
-        row = self.terminal_list.row(current_item)
-        instance = current_item.data(Qt.ItemDataRole.UserRole)
+        row = self.terminal_list.row(item_to_kill)
+        instance = item_to_kill.data(Qt.ItemDataRole.UserRole)
 
         self.terminal_list.takeItem(row)
         self.terminal_stack.removeWidget(instance)
 
         self.terminals.remove(instance)
+
+        if instance is self.main_window.pyforge_manager.active_terminal_instance:
+            self.main_window.pyforge_manager.on_session_ended()
+
         instance.shutdown()
         instance.deleteLater()
 
         if self.terminal_list.count() == 0:
             self.main_window.terminal_dock.hide()
+
+    @Slot()
+    def kill_current_terminal(self):
+        self._kill_item(self.terminal_list.currentItem())
 
     @Slot(TerminalInstance, str)
     def on_terminal_name_changed(self, instance, name: str):

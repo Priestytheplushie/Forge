@@ -1,0 +1,29 @@
+# log_agent_connections.pfscript.template
+# This script logs when the Forge UI connects or disconnects from the agent.
+# Attach this to the 'on_agent_connect' and 'on_agent_disconnect' hooks.
+
+# The 'pf' object is always available.
+pf.log(f"Agent event received: {HOOK_NAME}")```
+
+`src/forge/frontend/components/pyforge/templates/metrics/boolean_status_metric.pfscript.template` (New File)
+```python
+# boolean_status_metric.pfscript.template
+# This is a template for a boolean (True/False) metric.
+
+# --- Instructions ---
+# 1. Rename the function 'my_boolean_metric' to something unique.
+# 2. Rename the metric name "My Boolean Status" to what you want to see in the UI.
+# 3. Modify the logic to return True or False based on your application's state.
+
+@pf.metric(name="My Boolean Status", type="value")
+def my_boolean_metric():
+    """
+    This function should return True or False.
+    Useful for monitoring flags or connection states.
+    """
+    # Example: Check if a global variable 'is_connected' exists and is True
+    try:
+        # pf.get() will find the 'is_connected' variable in the global scope
+        return pf.get('is_connected')
+    except NameError:
+        return False

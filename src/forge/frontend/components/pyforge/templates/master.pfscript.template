@@ -1,0 +1,29 @@
+# master.pfscript.template
+# This is the master script for your PyForge session.
+# It allows you to define custom agent behavior through hooks and metrics.
+# Learn more by clicking the (?) help buttons in the UI.
+
+import pf
+import time
+import random
+
+# --- Global Scope ---
+# Code here runs once when the script is loaded or reloaded.
+pf.log("Master Script loaded!")
+
+
+# --- Hooks ---
+# Hooks are functions that run when specific agent events occur.
+# You can add your own logic or use pf.run_script('path/to/script.pfscript')
+# to keep your code organized.
+
+def on_tick():
+    """Runs on every agent heartbeat (approx. every 2 seconds)."""
+    pass
+
+def on_new_instance(instance, class_name):
+    """Runs when a new instance of a watched class is created."""
+    pass
+
+# To add more hooks, right-click the 'Hooks' folder in the Master Script Manager
+# and select 'Add Hook Definition...'.

@@ -2,7 +2,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 from PySide6.QtCore import Qt
 
 
-class GenericPlaceholder(QWidget):
+class GenericView(QWidget):
     def __init__(self, name: str, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)

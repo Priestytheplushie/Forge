@@ -1,0 +1,32 @@
+# WARNING: Overrides are an advanced, experimental feature.
+# An incorrect override can break the agent's connection to the UI,
+# requiring a full restart of your application. Use with extreme caution.
+
+# --- Instructions ---
+# 1. Uncomment the code below.
+# 2. This example overrides the agent's `_discover_roots` function.
+# 3. The original function is passed as the first argument, allowing you to
+#    call it, inspect its results, and modify them before returning.
+
+# @pf.override("agent._discover_roots")
+# def custom_discover_roots(original_discover_roots, workspace_path_str):
+#     """
+#     This function will replace the agent's default root discovery.
+#     It must accept the original function as its first argument, followed by
+#     the original function's arguments.
+#     """
+#     pf.log("CUSTOM OVERRIDE: _discover_roots is running!")
+#
+#     # Call the original function to get the default list of roots
+#     roots = original_discover_roots(workspace_path_str)
+#
+#     # Add a new custom category to the top of the object browser
+#     my_custom_category = {
+#         "name": "[My Custom Objects]",
+#         "type": "special_group",
+#         "path": "special:my_custom_objects",
+#         "expandable": True
+#     }
+#     roots.insert(0, my_custom_category)
+#
+#     return roots

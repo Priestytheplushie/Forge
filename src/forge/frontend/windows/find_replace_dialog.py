@@ -22,7 +22,6 @@ class FindReplaceDialog(QDialog):
         main_layout = QVBoxLayout(self)
         form_layout = QFormLayout()
         form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-
         form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         explanation_label = QLabel(

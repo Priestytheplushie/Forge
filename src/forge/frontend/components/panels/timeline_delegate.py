@@ -30,7 +30,7 @@ class TimelineDelegate(QStyledItemDelegate):
                 center_x, option.rect.top(), center_x, center_x - option.rect.top() - 2
             )
 
-        if index.row() < index.model().rowCount() - 1:
+        if index.row() < index.model().rowCount(index.parent()) - 1:
             painter.drawLine(
                 center_x,
                 option.rect.bottom(),

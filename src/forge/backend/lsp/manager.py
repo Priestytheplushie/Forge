@@ -28,6 +28,7 @@ class LSPManager(QObject):
         self.server_process = None
         self.reader_thread = None
         self._next_id = 1
+        self._is_shutting_down = False
 
     def start_server(self):
         command_name = (
@@ -69,6 +70,26 @@ class LSPManager(QObject):
             self._initialize_server()
         except Exception as e:
             print(f"[LSPManager] Failed to start server: {e}")
+
+    def add_extra_file_for_analysis(self, file_path: str):
+        """Adds a file's parent directory to the LSP's extraPaths for module resolution."""
+        if self.settings_payload:
+            stub_dir = str(Path(file_path).parent)
+            print(f"[LSPManager] Adding stub directory to extraPaths: {stub_dir}")
+
+            for key in ["python", "basedpyright"]:
+                analysis = self.settings_payload.setdefault(key, {}).setdefault(
+                    "analysis", {}
+                )
+                extra_paths = analysis.setdefault("extraPaths", [])
+                if stub_dir not in extra_paths:
+                    extra_paths.append(stub_dir)
+
+            if self.server_process:
+                self.send_notification(
+                    "workspace/didChangeConfiguration",
+                    {"settings": self.settings_payload},
+                )
 
     def _log_stderr(self):
         for line in iter(self.server_process.stderr.readline, b""):
@@ -131,12 +152,19 @@ class LSPManager(QObject):
         self._send_message(notification)
 
     def _send_message(self, message: dict):
-        if self.server_process and self.server_process.stdin:
-            try:
-                self.server_process.stdin.write(encode_message(message))
-                self.server_process.stdin.flush()
-            except Exception as e:
-                print(f"[LSPManager] Could not send message: {e}")
+
+        if (
+            self._is_shutting_down
+            or not self.server_process
+            or not self.server_process.stdin
+        ):
+            return
+
+        try:
+            self.server_process.stdin.write(encode_message(message))
+            self.server_process.stdin.flush()
+        except Exception as e:
+            print(f"[LSPManager] Could not send message: {e}")
 
     def _initialize_server(self):
         workspace_uri = Path(self.workspace_path).as_uri()
@@ -145,7 +173,24 @@ class LSPManager(QObject):
             "capabilities": {
                 "workspace": {"didChangeConfiguration": {}},
                 "textDocument": {
-                    "codeAction": {"dynamicRegistration": True},
+                    "codeAction": {
+                        "dynamicRegistration": True,
+                        "codeActionLiteralSupport": {
+                            "codeActionKind": {
+                                "valueSet": [
+                                    "",
+                                    "quickfix",
+                                    "refactor",
+                                    "refactor.extract",
+                                    "refactor.inline",
+                                    "refactor.rewrite",
+                                    "source",
+                                    "source.organizeImports",
+                                ]
+                            }
+                        },
+                    },
+                    "codeLens": {"dynamicRegistration": True},
                     "semanticTokens": {
                         "dynamicRegistration": False,
                         "requests": {"full": True},
@@ -172,6 +217,7 @@ class LSPManager(QObject):
                             "number",
                             "regexp",
                             "operator",
+                            "decorator",
                         ],
                         "tokenModifiers": [
                             "declaration",
@@ -198,8 +244,12 @@ class LSPManager(QObject):
         self.send_request("initialize", params)
 
     def shutdown(self):
-        if self.server_process:
+        if self.server_process and not self._is_shutting_down:
+            self._is_shutting_down = True
             self.send_request("shutdown", None)
             self.send_notification("exit", None)
-            self.server_process.terminate()
-            self.server_process.wait(timeout=2)
+            try:
+                self.server_process.terminate()
+                self.server_process.wait(timeout=2)
+            except (subprocess.TimeoutExpired, OSError):
+                self.server_process.kill()

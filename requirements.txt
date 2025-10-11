@@ -7,3 +7,5 @@ flake8
 pyupgrade
 docformatter
 GitPython
+autopep8
+psutil

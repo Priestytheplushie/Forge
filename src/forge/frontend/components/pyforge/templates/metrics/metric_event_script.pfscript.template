@@ -1,0 +1,16 @@
+# metric_event_script.pfscript.template
+# This script runs automatically when a specific metric's value changes.
+
+# The following variables are automatically injected by the 'on_metric_update' hook:
+# - metric_path (str): The full path of the metric (e.g., 'system/cpu' or 'custom/My Metric').
+# - new_value (any): The new value of the metric.
+# - old_value (any): The previous value of the metric.
+
+import pf
+
+pf.log(f"Metric '{metric_path}' changed from {old_value} to {new_value}")
+
+# --- Example Logic ---
+# Uncomment the block below to perform an action when CPU usage goes above 75%.
+# if metric_path == 'system/cpu' and new_value > 75:
+#     pf.log("WARNING: High CPU usage detected!", new_value)

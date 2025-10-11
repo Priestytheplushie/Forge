@@ -40,7 +40,6 @@ class MergeConflictDialog(QDialog):
         files_label = QLabel("Conflicted Files:")
         self.files_list = QListWidget()
         for file_path in conflicted_files:
-
             file_info = QFileInfo(file_path)
             item = QListWidgetItem(icon_provider.icon(file_info), file_path)
             self.files_list.addItem(item)

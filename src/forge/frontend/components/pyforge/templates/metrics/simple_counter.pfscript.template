@@ -1,0 +1,21 @@
+# simple_counter.pfscript.template
+# This is a template for a simple, graphable counter metric.
+
+# --- Instructions ---
+# 1. Rename the function 'my_counter_metric' to something unique.
+# 2. Rename the metric name "My Counter" to what you want to see in the UI.
+# 3. Modify the logic inside the function to return the value you want to track.
+
+@pf.metric(name="My Counter", type="graph")
+def my_counter_metric():
+    """
+    This function will be called on every tick.
+    It should return a number to be displayed in the metrics panel.
+    """
+    # Example: Count the number of active 'TestPlayer' instances
+    try:
+        player_instances = pf.find("TestPlayer")
+        return len(player_instances)
+    except NameError:
+        # Return 0 if the class isn't found yet
+        return 0

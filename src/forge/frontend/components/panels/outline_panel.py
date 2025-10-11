@@ -38,7 +38,6 @@ class OutlinePanel(QWidget):
         A recursive function to walk the symbol hierarchy and build the tree.
         """
         for symbol in symbols:
-
             kind = symbol["kind"]
 
             symbol_range = None

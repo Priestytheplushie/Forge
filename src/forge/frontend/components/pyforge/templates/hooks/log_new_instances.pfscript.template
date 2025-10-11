@@ -1,0 +1,7 @@
+# log_new_instances.pfscript.template
+# This script logs details about newly created objects.
+# It is designed to be attached to the 'on_new_instance' hook.
+
+# The 'instance' and 'class_name' variables are automatically provided by the hook.
+pf.log(f"New instance detected via Event Script: A {class_name} was created!")
+pf.log("Instance details:", pf.inspect_object(instance))
