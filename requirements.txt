@@ -1,0 +1,8 @@
+pygments
+customtkinter
+python-lsp-client
+python-lsp-server[all]
+lsprotocol
+pygls
+tkterm
+Pillow
