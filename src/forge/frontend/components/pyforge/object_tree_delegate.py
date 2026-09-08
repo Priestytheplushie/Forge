@@ -88,7 +88,7 @@ class ObjectTreeDelegate(QStyledItemDelegate):
             icon_size = 12
             icon_rect = QRect(
                 option.rect.right() - icon_size - 4,
-                option.rect.top() + (option.rect.height() - icon_size) 
+                option.rect.top() + (option.rect.height() - icon_size) // 2,
                 icon_size,
                 icon_size,
             )

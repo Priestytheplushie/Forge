@@ -29,7 +29,7 @@ class GitDiagramWidget(QWidget):
         painter.setFont(font)
         painter.setPen(self.label_color)
         painter.drawText(10, 15, "Before:")
-        painter.drawText(self.width() 
+        painter.drawText(self.width() - 50, 15, "After:")
 
         if self.diagram_type == "create":
             self._draw_create_diagram(painter)

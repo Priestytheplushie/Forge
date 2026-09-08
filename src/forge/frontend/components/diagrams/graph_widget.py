@@ -31,8 +31,8 @@ class GraphWidget(QWidget):
         painter.fillRect(self.rect(), self.palette().window().color())
 
         painter.setPen(self.grid_color)
-        painter.drawLine(0, self.height() 
         painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+        painter.drawLine(0, 0, 0, self.height() - 1)
 
         if len(self.data) > 1:
             points = QPolygonF()

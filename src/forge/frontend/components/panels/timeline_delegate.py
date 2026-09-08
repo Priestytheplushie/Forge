@@ -41,7 +41,7 @@ class TimelineDelegate(QStyledItemDelegate):
         if icon:
             icon_rect = QRect(
                 option.rect.left() + 8,
-                option.rect.top() + (option.rect.height() - 16) 
+                option.rect.top() + (option.rect.height() - 16) // 2,
                 16,
                 16,
             )
